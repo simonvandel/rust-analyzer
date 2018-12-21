@@ -268,6 +268,16 @@ impl Analysis {
     pub fn extend_selection(&self, file: &SourceFileNode, range: TextRange) -> TextRange {
         ra_editor::extend_selection(file, range).unwrap_or(range)
     }
+    pub fn selection_ranges(&self, position: FilePosition) -> Vec<TextRange> {
+        let file = self.file_syntax(position.file_id);
+        let mut res = Vec::new();
+        let mut range = TextRange::offset_len(position.offset, 0.into());
+        while let Some(r) = ra_editor::extend_selection(&file, range) {
+            res.push(r);
+            range = r;
+        }
+        res
+    }
     pub fn matching_brace(&self, file: &SourceFileNode, offset: TextUnit) -> Option<TextUnit> {
         ra_editor::matching_brace(file, offset)
     }

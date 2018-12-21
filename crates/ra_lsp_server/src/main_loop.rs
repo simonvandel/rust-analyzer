@@ -250,6 +250,7 @@ fn on_request(
         .on::<req::Completion>(handlers::handle_completion)?
         .on::<req::CodeActionRequest>(handlers::handle_code_action)?
         .on::<req::FoldingRangeRequest>(handlers::handle_folding_range)?
+        .on::<req::SelectionRangeRequest>(handlers::handle_selection_range)?
         .on::<req::SignatureHelpRequest>(handlers::handle_signature_help)?
         .on::<req::HoverRequest>(handlers::handle_hover)?
         .on::<req::PrepareRenameRequest>(handlers::handle_prepare_rename)?

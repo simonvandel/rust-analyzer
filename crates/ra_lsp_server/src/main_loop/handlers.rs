@@ -45,6 +45,22 @@ pub fn handle_extend_selection(
     Ok(req::ExtendSelectionResult { selections })
 }
 
+pub fn handle_selection_range(
+    world: ServerWorld,
+    params: req::TextDocumentPositionParams,
+) -> Result<Vec<req::SelectionRange>> {
+    let position = params.try_conv_with(&world)?;
+    let line_index = world.analysis().file_line_index(position.file_id);
+    let ranges = world
+        .analysis()
+        .selection_ranges(position)
+        .into_iter()
+        .map_conv_with(&line_index)
+        .map(|range| req::SelectionRange { range })
+        .collect();
+    Ok(ranges)
+}
+
 pub fn handle_find_matching_brace(
     world: ServerWorld,
     params: req::FindMatchingBraceParams,

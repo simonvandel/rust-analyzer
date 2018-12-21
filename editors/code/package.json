@@ -15,6 +15,7 @@
     "engines": {
         "vscode": "^1.30.0"
     },
+    "enableProposedApi": true,
     "scripts": {
         "vscode:prepublish": "npm run compile",
         "package": "vsce package",
@@ -31,7 +32,7 @@
         "singleQuote": true
     },
     "dependencies": {
-        "vscode-languageclient": "^5.2.1"
+        "vscode-languageclient": "file:///home/matklad/projects/vscode-languageserver-node/client/"
     },
     "devDependencies": {
         "@types/mocha": "^2.2.42",

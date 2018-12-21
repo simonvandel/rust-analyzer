@@ -40,6 +40,7 @@ pub fn server_capabilities() -> ServerCapabilities {
             more_trigger_character: None,
         }),
         folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+        selection_range_provider: Some(true),
         rename_provider: Some(RenameProviderCapability::Options(RenameOptions {
             prepare_provider: Some(true),
         })),
