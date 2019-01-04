@@ -33,6 +33,8 @@ mod adt;
 mod type_ref;
 mod ty;
 
+pub mod code_model;
+
 use crate::{
     db::HirDatabase,
     name::{AsName, KnownName},

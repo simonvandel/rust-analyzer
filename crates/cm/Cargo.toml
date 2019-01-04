@@ -1,0 +1,6 @@
+[package]
+edition = "2018"
+name = "cm"
+version = "0.1.0"
+authors = ["Aleksey Kladov <aleksey.kladov@gmail.com>"]
+description = "An object-oriented code model for the Rust programming langauge"

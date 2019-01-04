@@ -165,6 +165,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cm"
+version = "0.1.0"
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -727,6 +731,7 @@ name = "ra_hir"
 version = "0.1.0"
 dependencies = [
  "arrayvec 0.4.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "cm 0.1.0",
  "ena 0.11.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "flexi_logger 0.10.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "id-arena 2.0.0 (registry+https://github.com/rust-lang/crates.io-index)",

@@ -122,7 +122,7 @@ impl MacroCallLoc {
 /// Def's are a core concept of hir. A `Def` is an Item (function, module, etc)
 /// in a specific module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DefId(u32);
+pub struct DefId(pub(crate) u32);
 ra_db::impl_numeric_id!(DefId);
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

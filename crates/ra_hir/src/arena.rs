@@ -9,8 +9,14 @@ use std::{
 };
 
 pub struct Id<T> {
-    idx: u32,
+    pub(crate) idx: u32,
     _ty: PhantomData<fn() -> T>,
+}
+
+impl<T> Id<T> {
+    pub(crate) fn new(idx: u32) -> Id<T> {
+        Id { idx, _ty: PhantomData }
+    }
 }
 
 impl<T> fmt::Debug for Id<T> {

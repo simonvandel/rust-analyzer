@@ -31,7 +31,7 @@ pub struct Module {
 }
 
 impl Module {
-    pub(super) fn new(
+    pub(crate) fn new(
         db: &impl HirDatabase,
         source_root_id: SourceRootId,
         module_id: ModuleId,
