@@ -390,8 +390,9 @@ impl<'t> Parser<'t> {
     }
 
     /// Mark the PrecedableMarker as sealed, so it cannot be preceded
-    pub(crate) fn seal(&mut self, _: PrecedableMarker) {
+    pub(crate) fn seal(&mut self, mut m: PrecedableMarker) {
         eprintln!("seal called");
+        m.bomb.defuse();
         let idx_to_drain_from = self.pop_buffering_index();
 
         // the current marker is now sealed - if nothing is currently in buffereing mode, we can drain the events
@@ -489,7 +490,6 @@ impl<T: MarkerType> Marker<T> {
         p.push_event(Event::Finish);
         // since the marker is sealed, we know that precede will not be called on this marker
         // so we can drain all events from the start of this marker to the event
-        // p.drain_events(self.pos);
         if p.buffering_start_index.is_empty() {
             debug_assert!(!p.events.is_empty());
             p.drain_events(self.pos);
@@ -548,11 +548,17 @@ pub(crate) struct PrecedableMarker {
     start_pos: u32,
     finish_pos: u32,
     kind: SyntaxKind,
+    bomb: DropBomb,
 }
 
 impl PrecedableMarker {
     fn new(start_pos: u32, finish_pos: u32, kind: SyntaxKind) -> Self {
-        PrecedableMarker { start_pos, finish_pos, kind }
+        PrecedableMarker {
+            start_pos,
+            finish_pos,
+            kind,
+            bomb: DropBomb::new("paresr.seal() has to be called"),
+        }
     }
 
     // TODO svs: skal løses:
@@ -588,9 +594,9 @@ impl PrecedableMarker {
     /// Append a new `START` events as `[START, FINISH, NEWSTART]`,
     /// then mark `NEWSTART` as `START`'s parent with saving its relative
     /// distance to `NEWSTART` into forward_parent(=2 in this case);
-    pub(crate) fn precede(self, p: &mut Parser) -> Marker<Precedable> {
+    pub(crate) fn precede(mut self, p: &mut Parser) -> Marker<Precedable> {
         // TODO: precede design: can it be simpler? the forward_parent should be removed in favor of prepending the new parent event in the current list of events
-
+        self.bomb.defuse();
         let new_pos = p.start_internal();
         p.set_buffered(&new_pos);
         let idx = self.start_pos as usize;
@@ -604,7 +610,8 @@ impl PrecedableMarker {
     }
 
     /// Undo this completion and turns into a `Marker`
-    pub(crate) fn undo_completion(self, p: &mut Parser) -> Marker<Sealed> {
+    pub(crate) fn undo_completion(mut self, p: &mut Parser) -> Marker<Sealed> {
+        self.bomb.defuse();
         let start_idx = self.start_pos as usize;
         let finish_idx = self.finish_pos as usize;
         match p.events[start_idx] {

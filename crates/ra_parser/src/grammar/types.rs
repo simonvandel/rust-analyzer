@@ -294,6 +294,8 @@ pub(super) fn path_type_(p: &mut Parser, allow_bounds: bool) {
     let path = m.complete_precedable(p, PATH_TYPE);
     if allow_bounds {
         opt_path_type_bounds_as_dyn_trait_type(p, path);
+    } else {
+        p.seal(path);
     }
 }
 
