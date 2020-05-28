@@ -27,25 +27,9 @@ pub(crate) struct Parser<'t> {
     steps: Cell<u32>,
     f: fn(&mut Parser),
     sink: &'t mut dyn TreeSink,
-    // whether to drain eagerly on new start node. This must only be true when we are not currently in any precedable environment
-    drain_options: DrainOption,
     // Stack of indices where the buffering of events started. This starts with empty. When empty, events are eagerly drained. When non-empty, events are buffered
     buffering_start_index: Vec<u32>,
     forward_parents: Vec<SyntaxKind>,
-}
-
-#[derive(Eq, PartialEq)]
-enum Mode {
-    Eager,
-    Buffer,
-    Unset,
-}
-
-#[derive(Eq, PartialEq)]
-enum DrainOption {
-    Unset,
-    DrainOnStart,
-    DoNotDrainOnStart,
 }
 
 impl<'t> Parser<'t> {
@@ -60,7 +44,6 @@ impl<'t> Parser<'t> {
             steps: Cell::new(0),
             f,
             sink,
-            drain_options: DrainOption::Unset,
             buffering_start_index: Vec::new(),
             forward_parents: Vec::new(),
         }
@@ -226,9 +209,6 @@ impl<'t> Parser<'t> {
         eprintln!("start_internal called");
 
         let pos = self.events.len() as u32;
-        if self.drain_options == DrainOption::DrainOnStart {
-            // self.drain_events(pos)
-        }
 
         self.push_event(Event::tombstone());
         Marker::<Precedable>::new(pos)
@@ -240,7 +220,6 @@ impl<'t> Parser<'t> {
     {
         eprintln!("with_precedable_marker called");
 
-        self.drain_options = DrainOption::DoNotDrainOnStart;
         let m = self.start_internal();
         self.set_buffered(&m);
         f(self, m)
@@ -250,18 +229,18 @@ impl<'t> Parser<'t> {
     where
         F: FnOnce(&mut Parser),
     {
-        eprintln!("with_sealed called");
-        if self.drain_options == DrainOption::Unset {
-            self.drain_options = DrainOption::DrainOnStart;
-        }
+        eprintln!(
+            "with_sealed called (len of buffering_idx: {})",
+            self.buffering_start_index.len()
+        );
         // TODO: Sealed behøver vel ikke pos?
         let mut m = Marker::<Sealed>::new(self.events.len() as u32);
         // set the kind since we know it - this makes it possible to eagerly drain the events
 
         let event = Event::Start { kind: kind, forward_parent: None };
         self.push_event(event);
+        m.start_event_is_buffered = !self.buffering_start_index.is_empty();
         m.defuse();
-        let start_pos = m.pos;
 
         // with_sealed guarantees that it is not possible to precede the marker, so we don't have to handle forward parents
         // This also means that we can eagerly drain the events through the sink
@@ -435,7 +414,6 @@ impl<'t> Parser<'t> {
         if self.buffering_start_index.is_empty() {
             self.events.push(event);
             self.drain_events(self.events.len() as u32)
-        // self.process_event(event, self.events.len());
         } else {
             self.events.push(event)
         }
@@ -470,6 +448,7 @@ where
     bomb: DropBomb,
     only_completable: bool,
     t: PhantomData<T>,
+    start_event_is_buffered: bool,
 }
 
 impl<T: MarkerType> Marker<T> {
@@ -479,6 +458,7 @@ impl<T: MarkerType> Marker<T> {
             bomb: DropBomb::new("Marker must be either completed or abandoned"),
             only_completable: true,
             t: Default::default(),
+            start_event_is_buffered: true,
         }
     }
 
@@ -496,13 +476,16 @@ impl<T: MarkerType> Marker<T> {
     pub(crate) fn complete_sealed(mut self, p: &mut Parser, kind: SyntaxKind) {
         eprintln!("complete_sealed called kind: {:?}", kind);
         self.bomb.defuse();
-        let idx = self.pos as usize;
-        match p.events[idx] {
-            Event::Start { kind: ref mut slot, .. } => {
-                *slot = kind;
+        if self.start_event_is_buffered {
+            let idx = self.pos as usize;
+            match p.events[idx] {
+                Event::Start { kind: ref mut slot, .. } => {
+                    *slot = kind;
+                }
+                _ => unreachable!(),
             }
-            _ => unreachable!(),
         }
+
         p.push_event(Event::Finish);
         // since the marker is sealed, we know that precede will not be called on this marker
         // so we can drain all events from the start of this marker to the event
