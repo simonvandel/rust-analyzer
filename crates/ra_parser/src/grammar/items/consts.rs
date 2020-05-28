@@ -2,15 +2,15 @@
 
 use super::*;
 
-pub(super) fn static_def(p: &mut Parser, m: Marker) {
+pub(super) fn static_def(p: &mut Parser, m: Marker<Sealed>) {
     const_or_static(p, m, T![static], STATIC_DEF)
 }
 
-pub(super) fn const_def(p: &mut Parser, m: Marker) {
+pub(super) fn const_def(p: &mut Parser, m: Marker<Sealed>) {
     const_or_static(p, m, T![const], CONST_DEF)
 }
 
-fn const_or_static(p: &mut Parser, m: Marker, kw: SyntaxKind, def: SyntaxKind) {
+fn const_or_static(p: &mut Parser, m: Marker<Sealed>, kw: SyntaxKind, def: SyntaxKind) {
     assert!(p.at(kw));
     p.bump(kw);
     p.eat(T![mut]); // FIXME: validator to forbid const mut
@@ -29,5 +29,5 @@ fn const_or_static(p: &mut Parser, m: Marker, kw: SyntaxKind, def: SyntaxKind) {
         expressions::expr(p);
     }
     p.expect(T![;]);
-    m.complete(p, def);
+    m.complete_sealed(p, def);
 }

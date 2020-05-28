@@ -22,7 +22,7 @@ pub(super) fn opt_type_arg_list(p: &mut Parser, colon_colon_required: bool) {
         }
     }
     p.expect(T![>]);
-    m.complete(p, TYPE_ARG_LIST);
+    m.complete_sealed(p, TYPE_ARG_LIST);
 }
 
 // test type_arg
@@ -32,32 +32,32 @@ fn type_arg(p: &mut Parser) {
     match p.current() {
         LIFETIME => {
             p.bump(LIFETIME);
-            m.complete(p, LIFETIME_ARG);
+            m.complete_sealed(p, LIFETIME_ARG);
         }
         // test associated_type_bounds
         // fn print_all<T: Iterator<Item: Display>>(printables: T) {}
         IDENT if p.nth(1) == T![:] && p.nth(2) != T![:] => {
             name_ref(p);
             type_params::bounds(p);
-            m.complete(p, ASSOC_TYPE_ARG);
+            m.complete_sealed(p, ASSOC_TYPE_ARG);
         }
         IDENT if p.nth(1) == T![=] => {
             name_ref(p);
             p.bump_any();
             types::type_(p);
-            m.complete(p, ASSOC_TYPE_ARG);
+            m.complete_sealed(p, ASSOC_TYPE_ARG);
         }
         T!['{'] => {
             expressions::block_expr(p);
-            m.complete(p, CONST_ARG);
+            m.complete_sealed(p, CONST_ARG);
         }
         k if k.is_literal() => {
             p.bump(k);
-            m.complete(p, CONST_ARG);
+            m.complete_sealed(p, CONST_ARG);
         }
         _ => {
             types::type_(p);
-            m.complete(p, TYPE_ARG);
+            m.complete_sealed(p, TYPE_ARG);
         }
     }
 }

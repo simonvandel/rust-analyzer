@@ -1,6 +1,7 @@
 //! FIXME: write short doc here
 
 use super::*;
+use crate::parser::Precedable;
 
 // test expr_literals
 // fn foo() {
@@ -28,13 +29,13 @@ pub(crate) const LITERAL_FIRST: TokenSet = token_set![
     RAW_BYTE_STRING
 ];
 
-pub(crate) fn literal(p: &mut Parser) -> Option<CompletedMarker> {
+pub(crate) fn literal(p: &mut Parser) -> Option<PrecedableMarker> {
     if !p.at_ts(LITERAL_FIRST) {
         return None;
     }
-    let m = p.start();
+    let m = p.start_precedable();
     p.bump_any();
-    Some(m.complete(p, LITERAL))
+    Some(m.complete_precedable(p, LITERAL))
 }
 
 // E.g. for after the break in `if break {}`, this should not match
@@ -63,7 +64,7 @@ pub(super) const ATOM_EXPR_FIRST: TokenSet =
 
 const EXPR_RECOVERY_SET: TokenSet = token_set![LET_KW, R_DOLLAR];
 
-pub(super) fn atom_expr(p: &mut Parser, r: Restrictions) -> Option<(CompletedMarker, BlockLike)> {
+pub(super) fn atom_expr(p: &mut Parser, r: Restrictions) -> Option<(PrecedableMarker, BlockLike)> {
     if let Some(m) = literal(p) {
         return Some((m, BlockLike::NotBlock));
     }
@@ -86,7 +87,7 @@ pub(super) fn atom_expr(p: &mut Parser, r: Restrictions) -> Option<(CompletedMar
         T![while] => while_expr(p, None),
         T![try] => try_block_expr(p, None),
         LIFETIME if la == T![:] => {
-            let m = p.start();
+            let m = p.start_precedable();
             label(p);
             match p.current() {
                 T![loop] => loop_expr(p, Some(m)),
@@ -96,7 +97,7 @@ pub(super) fn atom_expr(p: &mut Parser, r: Restrictions) -> Option<(CompletedMar
                 // fn f() { 'label: {}; }
                 T!['{'] => {
                     block_expr(p);
-                    m.complete(p, EFFECT_EXPR)
+                    m.complete_precedable(p, EFFECT_EXPR)
                 }
                 _ => {
                     // test_err misplaced_label_err
@@ -104,26 +105,26 @@ pub(super) fn atom_expr(p: &mut Parser, r: Restrictions) -> Option<(CompletedMar
                     //     'loop: impl
                     // }
                     p.error("expected a loop");
-                    m.complete(p, ERROR);
+                    m.complete_sealed(p, ERROR);
                     return None;
                 }
             }
         }
         T![async] if la == T!['{'] || (la == T![move] && p.nth(2) == T!['{']) => {
-            let m = p.start();
+            let m = p.start_precedable();
             p.bump(T![async]);
             p.eat(T![move]);
             block_expr(p);
-            m.complete(p, EFFECT_EXPR)
+            m.complete_precedable(p, EFFECT_EXPR)
         }
         T![match] => match_expr(p),
         // test unsafe_block
         // fn f() { unsafe { } }
         T![unsafe] if la == T!['{'] => {
-            let m = p.start();
+            let m = p.start_precedable();
             p.bump(T![unsafe]);
             block_expr(p);
-            m.complete(p, EFFECT_EXPR)
+            m.complete_precedable(p, EFFECT_EXPR)
         }
         T!['{'] => {
             // test for_range_from
@@ -157,9 +158,9 @@ pub(super) fn atom_expr(p: &mut Parser, r: Restrictions) -> Option<(CompletedMar
 //     (1);
 //     (1,);
 // }
-fn tuple_expr(p: &mut Parser) -> CompletedMarker {
+fn tuple_expr(p: &mut Parser) -> PrecedableMarker {
     assert!(p.at(T!['(']));
-    let m = p.start();
+    let m = p.start_precedable();
     p.expect(T!['(']);
 
     let mut saw_comma = false;
@@ -177,7 +178,7 @@ fn tuple_expr(p: &mut Parser) -> CompletedMarker {
         }
     }
     p.expect(T![')']);
-    m.complete(p, if saw_expr && !saw_comma { PAREN_EXPR } else { TUPLE_EXPR })
+    m.complete_precedable(p, if saw_expr && !saw_comma { PAREN_EXPR } else { TUPLE_EXPR })
 }
 
 // test array_expr
@@ -187,9 +188,9 @@ fn tuple_expr(p: &mut Parser) -> CompletedMarker {
 //     [1, 2,];
 //     [1; 2];
 // }
-fn array_expr(p: &mut Parser) -> CompletedMarker {
+fn array_expr(p: &mut Parser) -> PrecedableMarker {
     assert!(p.at(T!['[']));
-    let m = p.start();
+    let m = p.start_precedable();
 
     let mut n_exprs = 0u32;
     let mut has_semi = false;
@@ -215,7 +216,7 @@ fn array_expr(p: &mut Parser) -> CompletedMarker {
     }
     p.expect(T![']']);
 
-    m.complete(p, ARRAY_EXPR)
+    m.complete_precedable(p, ARRAY_EXPR)
 }
 
 // test lambda_expr
@@ -228,14 +229,14 @@ fn array_expr(p: &mut Parser) -> CompletedMarker {
 //     move || {};
 //     async move || {};
 // }
-fn lambda_expr(p: &mut Parser) -> CompletedMarker {
+fn lambda_expr(p: &mut Parser) -> PrecedableMarker {
     assert!(
         p.at(T![|])
             || (p.at(T![move]) && p.nth(1) == T![|])
             || (p.at(T![async]) && p.nth(1) == T![|])
             || (p.at(T![async]) && p.nth(1) == T![move] && p.nth(2) == T![|])
     );
-    let m = p.start();
+    let m = p.start_precedable();
     p.eat(T![async]);
     p.eat(T![move]);
     params::param_list_closure(p);
@@ -250,7 +251,7 @@ fn lambda_expr(p: &mut Parser) -> CompletedMarker {
             p.error("expected expression");
         }
     }
-    m.complete(p, LAMBDA_EXPR)
+    m.complete_precedable(p, LAMBDA_EXPR)
 }
 
 // test if_expr
@@ -261,21 +262,22 @@ fn lambda_expr(p: &mut Parser) -> CompletedMarker {
 //     if S {};
 //     if { true } { } else { };
 // }
-fn if_expr(p: &mut Parser) -> CompletedMarker {
+fn if_expr(p: &mut Parser) -> PrecedableMarker {
     assert!(p.at(T![if]));
-    let m = p.start();
+    let m = p.start_precedable();
     p.bump(T![if]);
     cond(p);
     block_expr(p);
     if p.at(T![else]) {
         p.bump(T![else]);
         if p.at(T![if]) {
-            if_expr(p);
+            let m = if_expr(p);
+            p.seal(m);
         } else {
             block_expr(p);
         }
     }
-    m.complete(p, IF_EXPR)
+    m.complete_precedable(p, IF_EXPR)
 }
 
 // test label
@@ -289,19 +291,19 @@ fn label(p: &mut Parser) {
     let m = p.start();
     p.bump(LIFETIME);
     p.bump_any();
-    m.complete(p, LABEL);
+    m.complete_sealed(p, LABEL);
 }
 
 // test loop_expr
 // fn foo() {
 //     loop {};
 // }
-fn loop_expr(p: &mut Parser, m: Option<Marker>) -> CompletedMarker {
+fn loop_expr(p: &mut Parser, m: Option<Marker<Precedable>>) -> PrecedableMarker {
     assert!(p.at(T![loop]));
-    let m = m.unwrap_or_else(|| p.start());
+    let m = m.unwrap_or_else(|| p.start_precedable());
     p.bump(T![loop]);
     block_expr(p);
-    m.complete(p, LOOP_EXPR)
+    m.complete_precedable(p, LOOP_EXPR)
 }
 
 // test while_expr
@@ -310,28 +312,28 @@ fn loop_expr(p: &mut Parser, m: Option<Marker>) -> CompletedMarker {
 //     while let Some(x) = it.next() {};
 //     while { true } {};
 // }
-fn while_expr(p: &mut Parser, m: Option<Marker>) -> CompletedMarker {
+fn while_expr(p: &mut Parser, m: Option<Marker<Precedable>>) -> PrecedableMarker {
     assert!(p.at(T![while]));
-    let m = m.unwrap_or_else(|| p.start());
+    let m = m.unwrap_or_else(|| p.start_precedable());
     p.bump(T![while]);
     cond(p);
     block_expr(p);
-    m.complete(p, WHILE_EXPR)
+    m.complete_precedable(p, WHILE_EXPR)
 }
 
 // test for_expr
 // fn foo() {
 //     for x in [] {};
 // }
-fn for_expr(p: &mut Parser, m: Option<Marker>) -> CompletedMarker {
+fn for_expr(p: &mut Parser, m: Option<Marker<Precedable>>) -> PrecedableMarker {
     assert!(p.at(T![for]));
-    let m = m.unwrap_or_else(|| p.start());
+    let m = m.unwrap_or_else(|| p.start_precedable());
     p.bump(T![for]);
     patterns::pattern(p);
     p.expect(T![in]);
     expr_no_struct(p);
     block_expr(p);
-    m.complete(p, FOR_EXPR)
+    m.complete_precedable(p, FOR_EXPR)
 }
 
 // test cond
@@ -349,7 +351,7 @@ fn cond(p: &mut Parser) {
         p.expect(T![=]);
     }
     expr_no_struct(p);
-    m.complete(p, CONDITION);
+    m.complete_sealed(p, CONDITION);
 }
 
 // test match_expr
@@ -359,9 +361,9 @@ fn cond(p: &mut Parser) {
 //     match { } { _ => () };
 //     match { S {} } {};
 // }
-fn match_expr(p: &mut Parser) -> CompletedMarker {
+fn match_expr(p: &mut Parser) -> PrecedableMarker {
     assert!(p.at(T![match]));
-    let m = p.start();
+    let m = p.start_precedable();
     p.bump(T![match]);
     expr_no_struct(p);
     if p.at(T!['{']) {
@@ -369,7 +371,7 @@ fn match_expr(p: &mut Parser) -> CompletedMarker {
     } else {
         p.error("expected `{`")
     }
-    m.complete(p, MATCH_EXPR)
+    m.complete_precedable(p, MATCH_EXPR)
 }
 
 pub(crate) fn match_arm_list(p: &mut Parser) {
@@ -409,7 +411,7 @@ pub(crate) fn match_arm_list(p: &mut Parser) {
         }
     }
     p.expect(T!['}']);
-    m.complete(p, MATCH_ARM_LIST);
+    m.complete_sealed(p, MATCH_ARM_LIST);
 }
 
 // test match_arm
@@ -445,7 +447,7 @@ fn match_arm(p: &mut Parser) -> BlockLike {
     }
     p.expect(T![=>]);
     let blocklike = expr_stmt(p).1;
-    m.complete(p, MATCH_ARM);
+    m.complete_sealed(p, MATCH_ARM);
     blocklike
 }
 
@@ -455,12 +457,12 @@ fn match_arm(p: &mut Parser) -> BlockLike {
 //         _ if foo => (),
 //     }
 // }
-fn match_guard(p: &mut Parser) -> CompletedMarker {
+fn match_guard(p: &mut Parser) {
     assert!(p.at(T![if]));
     let m = p.start();
     p.bump(T![if]);
     expr(p);
-    m.complete(p, MATCH_GUARD)
+    m.complete_sealed(p, MATCH_GUARD);
 }
 
 // test block
@@ -473,16 +475,17 @@ pub(crate) fn block_expr(p: &mut Parser) {
         p.error("expected a block");
         return;
     }
-    block_expr_unchecked(p);
+    let m = block_expr_unchecked(p);
+    p.seal(m);
 }
 
-fn block_expr_unchecked(p: &mut Parser) -> CompletedMarker {
+fn block_expr_unchecked(p: &mut Parser) -> PrecedableMarker {
     assert!(p.at(T!['{']));
-    let m = p.start();
+    let m = p.start_precedable();
     p.bump(T!['{']);
     expr_block_contents(p);
     p.expect(T!['}']);
-    m.complete(p, BLOCK_EXPR)
+    m.complete_precedable(p, BLOCK_EXPR)
 }
 
 // test return_expr
@@ -490,14 +493,14 @@ fn block_expr_unchecked(p: &mut Parser) -> CompletedMarker {
 //     return;
 //     return 92;
 // }
-fn return_expr(p: &mut Parser) -> CompletedMarker {
+fn return_expr(p: &mut Parser) -> PrecedableMarker {
     assert!(p.at(T![return]));
-    let m = p.start();
+    let m = p.start_precedable();
     p.bump(T![return]);
     if p.at_ts(EXPR_FIRST) {
         expr(p);
     }
-    m.complete(p, RETURN_EXPR)
+    m.complete_precedable(p, RETURN_EXPR)
 }
 
 // test continue_expr
@@ -507,12 +510,12 @@ fn return_expr(p: &mut Parser) -> CompletedMarker {
 //         continue 'l;
 //     }
 // }
-fn continue_expr(p: &mut Parser) -> CompletedMarker {
+fn continue_expr(p: &mut Parser) -> PrecedableMarker {
     assert!(p.at(T![continue]));
-    let m = p.start();
+    let m = p.start_precedable();
     p.bump(T![continue]);
     p.eat(LIFETIME);
-    m.complete(p, CONTINUE_EXPR)
+    m.complete_precedable(p, CONTINUE_EXPR)
 }
 
 // test break_expr
@@ -524,50 +527,52 @@ fn continue_expr(p: &mut Parser) -> CompletedMarker {
 //         break 'l 92;
 //     }
 // }
-fn break_expr(p: &mut Parser, r: Restrictions) -> CompletedMarker {
+fn break_expr(p: &mut Parser, r: Restrictions) -> PrecedableMarker {
     assert!(p.at(T![break]));
-    let m = p.start();
-    p.bump(T![break]);
-    p.eat(LIFETIME);
-    // test break_ambiguity
-    // fn foo(){
-    //     if break {}
-    //     while break {}
-    //     for i in break {}
-    //     match break {}
-    // }
-    if p.at_ts(EXPR_FIRST) && !(r.forbid_structs && p.at(T!['{'])) {
-        expr(p);
-    }
-    m.complete(p, BREAK_EXPR)
+    p.with_precedable_marker(|p, m| {
+        p.bump(T![break]);
+        p.eat(LIFETIME);
+        // test break_ambiguity
+        // fn foo(){
+        //     if break {}
+        //     while break {}
+        //     for i in break {}
+        //     match break {}
+        // }
+        if p.at_ts(EXPR_FIRST) && !(r.forbid_structs && p.at(T!['{'])) {
+            expr(p);
+        }
+        m.complete_precedable(p, BREAK_EXPR)
+    })
 }
 
 // test try_block_expr
 // fn foo() {
 //     let _ = try {};
 // }
-fn try_block_expr(p: &mut Parser, m: Option<Marker>) -> CompletedMarker {
+fn try_block_expr(p: &mut Parser, m: Option<Marker<Precedable>>) -> PrecedableMarker {
     assert!(p.at(T![try]));
-    let m = m.unwrap_or_else(|| p.start());
+    let m = m.unwrap_or_else(|| p.start_precedable());
     // Special-case `try!` as macro.
     // This is a hack until we do proper edition support
     if p.nth_at(1, T![!]) {
         // test try_macro_fallback
         // fn foo() { try!(Ok(())); }
-        let path = p.start();
-        let path_segment = p.start();
-        let name_ref = p.start();
-        p.bump_remap(IDENT);
-        name_ref.complete(p, NAME_REF);
-        path_segment.complete(p, PATH_SEGMENT);
-        path.complete(p, PATH);
+        p.with_sealed(PATH, |p| {
+            p.with_sealed(PATH_SEGMENT, |p| {
+                p.with_sealed(NAME_REF, |p| {
+                    p.bump_remap(IDENT);
+                });
+            });
+        });
+
         let _block_like = items::macro_call_after_excl(p);
-        return m.complete(p, MACRO_CALL);
+        return m.complete_precedable(p, MACRO_CALL);
     }
 
     p.bump(T![try]);
     block_expr(p);
-    m.complete(p, EFFECT_EXPR)
+    m.complete_precedable(p, EFFECT_EXPR)
 }
 
 // test box_expr
@@ -576,20 +581,20 @@ fn try_block_expr(p: &mut Parser, m: Option<Marker>) -> CompletedMarker {
 //     let y = (box 1i32, box 2i32);
 //     let z = Foo(box 1i32, box 2i32);
 // }
-fn box_expr(p: &mut Parser, m: Option<Marker>) -> CompletedMarker {
+fn box_expr(p: &mut Parser, m: Option<Marker<Precedable>>) -> PrecedableMarker {
     assert!(p.at(T![box]));
-    let m = m.unwrap_or_else(|| p.start());
+    let m = m.unwrap_or_else(|| p.start_precedable());
     p.bump(T![box]);
     if p.at_ts(EXPR_FIRST) {
         expr(p);
     }
-    m.complete(p, BOX_EXPR)
+    m.complete_precedable(p, BOX_EXPR)
 }
 
 /// Expression from `$var` macro expansion, wrapped in dollars
-fn meta_var_expr(p: &mut Parser) -> CompletedMarker {
+fn meta_var_expr(p: &mut Parser) -> PrecedableMarker {
     assert!(p.at(L_DOLLAR));
-    let m = p.start();
+    let m = p.start_precedable();
     p.bump(L_DOLLAR);
     let (completed, _is_block) =
         expr_bp(p, Restrictions { forbid_structs: false, prefer_stmt: false }, 1);
@@ -605,7 +610,7 @@ fn meta_var_expr(p: &mut Parser) -> CompletedMarker {
                 p.bump_any()
             }
             p.bump(R_DOLLAR);
-            m.complete(p, ERROR)
+            m.complete_precedable(p, ERROR)
         }
     }
 }

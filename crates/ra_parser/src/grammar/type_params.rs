@@ -1,6 +1,7 @@
 //! FIXME: write short doc here
 
 use super::*;
+use crate::parser::{Precedable, Sealed};
 
 pub(super) fn opt_type_param_list(p: &mut Parser) {
     if !p.at(T![<]) {
@@ -36,19 +37,19 @@ fn type_param_list(p: &mut Parser) {
         }
     }
     p.expect(T![>]);
-    m.complete(p, TYPE_PARAM_LIST);
+    m.complete_sealed(p, TYPE_PARAM_LIST);
 }
 
-fn lifetime_param(p: &mut Parser, m: Marker) {
+fn lifetime_param(p: &mut Parser, m: Marker<Sealed>) {
     assert!(p.at(LIFETIME));
     p.bump(LIFETIME);
     if p.at(T![:]) {
         lifetime_bounds(p);
     }
-    m.complete(p, LIFETIME_PARAM);
+    m.complete_sealed(p, LIFETIME_PARAM);
 }
 
-fn type_param(p: &mut Parser, m: Marker) {
+fn type_param(p: &mut Parser, m: Marker<Sealed>) {
     assert!(p.at(IDENT));
     name(p);
     if p.at(T![:]) {
@@ -60,17 +61,17 @@ fn type_param(p: &mut Parser, m: Marker) {
         p.bump(T![=]);
         types::type_(p)
     }
-    m.complete(p, TYPE_PARAM);
+    m.complete_sealed(p, TYPE_PARAM);
 }
 
 // test const_param
 // struct S<const N: u32>;
-fn type_const_param(p: &mut Parser, m: Marker) {
+fn type_const_param(p: &mut Parser, m: Marker<Sealed>) {
     assert!(p.at(CONST_KW));
     p.bump(T![const]);
     name(p);
     types::ascription(p);
-    m.complete(p, CONST_PARAM);
+    m.complete_sealed(p, CONST_PARAM);
 }
 
 // test type_param_bounds
@@ -92,19 +93,23 @@ fn lifetime_bounds(p: &mut Parser) {
     }
 }
 
-pub(super) fn bounds_without_colon_m(p: &mut Parser, marker: Marker) -> CompletedMarker {
+pub(super) fn bounds_without_colon_m(
+    p: &mut Parser,
+    marker: Marker<Precedable>,
+) -> PrecedableMarker {
     while type_bound(p) {
         if !p.eat(T![+]) {
             break;
         }
     }
 
-    marker.complete(p, TYPE_BOUND_LIST)
+    marker.complete_precedable(p, TYPE_BOUND_LIST)
 }
 
 pub(super) fn bounds_without_colon(p: &mut Parser) {
-    let m = p.start();
-    bounds_without_colon_m(p, m);
+    let m = p.start_precedable();
+    let pm = bounds_without_colon_m(p, m);
+    p.seal(pm);
 }
 
 fn type_bound(p: &mut Parser) -> bool {
@@ -123,7 +128,7 @@ fn type_bound(p: &mut Parser) -> bool {
     if has_paren {
         p.expect(T![')']);
     }
-    m.complete(p, TYPE_BOUND);
+    m.complete_sealed(p, TYPE_BOUND);
 
     true
 }
@@ -157,7 +162,7 @@ pub(super) fn opt_where_clause(p: &mut Parser) {
         }
     }
 
-    m.complete(p, WHERE_CLAUSE);
+    m.complete_sealed(p, WHERE_CLAUSE);
 }
 
 fn is_where_predicate(p: &mut Parser) -> bool {
@@ -204,5 +209,5 @@ fn where_predicate(p: &mut Parser) {
             }
         }
     }
-    m.complete(p, WHERE_PRED);
+    m.complete_sealed(p, WHERE_PRED);
 }

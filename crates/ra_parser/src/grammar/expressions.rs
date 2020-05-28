@@ -5,6 +5,7 @@ mod atom;
 pub(crate) use self::atom::{block_expr, match_arm_list};
 pub(super) use self::atom::{literal, LITERAL_FIRST};
 use super::*;
+use crate::parser::Sealed;
 
 pub(super) enum StmtWithSemi {
     Yes,
@@ -14,7 +15,7 @@ pub(super) enum StmtWithSemi {
 
 const EXPR_FIRST: TokenSet = LHS_FIRST;
 
-pub(super) fn expr(p: &mut Parser) -> (Option<CompletedMarker>, BlockLike) {
+pub(super) fn expr(p: &mut Parser) -> (Option<PrecedableMarker>, BlockLike) {
     let r = Restrictions { forbid_structs: false, prefer_stmt: false };
     expr_bp(p, r, 1)
 }
@@ -31,7 +32,7 @@ pub(super) fn expr_with_attrs(p: &mut Parser) -> bool {
         (true, Some(cm)) => {
             let kind = cm.kind();
             cm.undo_completion(p).abandon(p);
-            m.complete(p, kind);
+            m.complete_sealed(p, kind);
         }
         _ => m.abandon(p),
     }
@@ -39,7 +40,7 @@ pub(super) fn expr_with_attrs(p: &mut Parser) -> bool {
     success
 }
 
-pub(super) fn expr_stmt(p: &mut Parser) -> (Option<CompletedMarker>, BlockLike) {
+pub(super) fn expr_stmt(p: &mut Parser) -> (Option<PrecedableMarker>, BlockLike) {
     let r = Restrictions { forbid_structs: false, prefer_stmt: true };
     expr_bp(p, r, 1)
 }
@@ -100,7 +101,7 @@ pub(super) fn stmt(p: &mut Parser, with_semi: StmtWithSemi) {
         // }
         if let Some(cm) = cm {
             cm.undo_completion(p).abandon(p);
-            m.complete(p, kind);
+            m.complete_sealed(p, kind);
         } else {
             m.abandon(p);
         }
@@ -136,7 +137,7 @@ pub(super) fn stmt(p: &mut Parser, with_semi: StmtWithSemi) {
             }
         }
 
-        m.complete(p, EXPR_STMT);
+        m.complete_sealed(p, EXPR_STMT);
     }
 
     // test let_stmt
@@ -149,7 +150,7 @@ pub(super) fn stmt(p: &mut Parser, with_semi: StmtWithSemi) {
     //     let _: ! = {};
     //     let f = #[attr]||{};
     // }
-    fn let_stmt(p: &mut Parser, m: Marker, with_semi: StmtWithSemi) {
+    fn let_stmt(p: &mut Parser, m: Marker<Sealed>, with_semi: StmtWithSemi) {
         assert!(p.at(T![let]));
         p.bump(T![let]);
         patterns::pattern(p);
@@ -171,7 +172,7 @@ pub(super) fn stmt(p: &mut Parser, with_semi: StmtWithSemi) {
                 }
             }
         }
-        m.complete(p, LET_STMT);
+        m.complete_sealed(p, LET_STMT);
     }
 }
 
@@ -256,7 +257,7 @@ fn current_op(p: &Parser) -> (u8, SyntaxKind) {
 }
 
 // Parses expression with binding power of at least bp.
-fn expr_bp(p: &mut Parser, mut r: Restrictions, bp: u8) -> (Option<CompletedMarker>, BlockLike) {
+fn expr_bp(p: &mut Parser, mut r: Restrictions, bp: u8) -> (Option<PrecedableMarker>, BlockLike) {
     let mut lhs = match lhs(p, r) {
         Some((lhs, blocklike)) => {
             // test stmt_bin_expr_ambiguity
@@ -306,13 +307,13 @@ fn expr_bp(p: &mut Parser, mut r: Restrictions, bp: u8) -> (Option<CompletedMark
                 p.at_ts(EXPR_FIRST) && !(r.forbid_structs && p.at(T!['{']));
             if !has_trailing_expression {
                 // no RHS
-                lhs = m.complete(p, RANGE_EXPR);
+                lhs = m.complete_precedable(p, RANGE_EXPR);
                 break;
             }
         }
 
         expr_bp(p, Restrictions { prefer_stmt: false, ..r }, op_bp + 1);
-        lhs = m.complete(p, if is_range { RANGE_EXPR } else { BIN_EXPR });
+        lhs = m.complete_precedable(p, if is_range { RANGE_EXPR } else { BIN_EXPR });
     }
     (Some(lhs), BlockLike::NotBlock)
 }
@@ -320,7 +321,7 @@ fn expr_bp(p: &mut Parser, mut r: Restrictions, bp: u8) -> (Option<CompletedMark
 const LHS_FIRST: TokenSet =
     atom::ATOM_EXPR_FIRST.union(token_set![T![&], T![*], T![!], T![.], T![-]]);
 
-fn lhs(p: &mut Parser, r: Restrictions) -> Option<(CompletedMarker, BlockLike)> {
+fn lhs(p: &mut Parser, r: Restrictions) -> Option<(PrecedableMarker, BlockLike)> {
     let m;
     let kind = match p.current() {
         // test ref_expr
@@ -335,7 +336,7 @@ fn lhs(p: &mut Parser, r: Restrictions) -> Option<(CompletedMarker, BlockLike)> 
         //     let _ = &raw const foo;
         // }
         T![&] => {
-            m = p.start();
+            m = p.start_precedable();
             p.bump(T![&]);
             if p.at(IDENT)
                 && p.at_contextual_kw("raw")
@@ -355,7 +356,7 @@ fn lhs(p: &mut Parser, r: Restrictions) -> Option<(CompletedMarker, BlockLike)> 
         //     --1;
         // }
         T![*] | T![!] | T![-] => {
-            m = p.start();
+            m = p.start_precedable();
             p.bump_any();
             PREFIX_EXPR
         }
@@ -364,12 +365,12 @@ fn lhs(p: &mut Parser, r: Restrictions) -> Option<(CompletedMarker, BlockLike)> 
             // fn foo() { xs[..]; }
             for &op in [T![..=], T![..]].iter() {
                 if p.at(op) {
-                    m = p.start();
+                    m = p.start_precedable();
                     p.bump(op);
                     if p.at_ts(EXPR_FIRST) && !(r.forbid_structs && p.at(T!['{'])) {
                         expr_bp(p, r, 2);
                     }
-                    return Some((m.complete(p, RANGE_EXPR), BlockLike::NotBlock));
+                    return Some((m.complete_precedable(p, RANGE_EXPR), BlockLike::NotBlock));
                 }
             }
 
@@ -385,18 +386,18 @@ fn lhs(p: &mut Parser, r: Restrictions) -> Option<(CompletedMarker, BlockLike)> 
     };
     // parse the interior of the unary expression
     expr_bp(p, r, 255);
-    Some((m.complete(p, kind), BlockLike::NotBlock))
+    Some((m.complete_precedable(p, kind), BlockLike::NotBlock))
 }
 
 fn postfix_expr(
     p: &mut Parser,
-    mut lhs: CompletedMarker,
+    mut lhs: PrecedableMarker,
     // Calls are disallowed if the type is a block and we prefer statements because the call cannot be disambiguated from a tuple
     // E.g. `while true {break}();` is parsed as
     // `while true {break}; ();`
     mut block_like: BlockLike,
     mut allow_calls: bool,
-) -> (CompletedMarker, BlockLike) {
+) -> (PrecedableMarker, BlockLike) {
     loop {
         lhs = match p.current() {
             // test stmt_postfix_expr_ambiguity
@@ -426,8 +427,8 @@ fn postfix_expr(
 
     fn postfix_dot_expr(
         p: &mut Parser,
-        lhs: CompletedMarker,
-    ) -> Result<CompletedMarker, CompletedMarker> {
+        lhs: PrecedableMarker,
+    ) -> Result<PrecedableMarker, PrecedableMarker> {
         assert!(p.at(T![.]));
         if p.nth(1) == IDENT && (p.nth(2) == T!['('] || p.nth_at(2, T![::])) {
             return Ok(method_call_expr(p, lhs));
@@ -443,7 +444,7 @@ fn postfix_expr(
             let m = lhs.precede(p);
             p.bump(T![.]);
             p.bump(T![await]);
-            return Ok(m.complete(p, AWAIT_EXPR));
+            return Ok(m.complete_precedable(p, AWAIT_EXPR));
         }
 
         if p.at(T![..=]) || p.at(T![..]) {
@@ -461,24 +462,24 @@ fn postfix_expr(
 //     let _ = f(<Foo>::func());
 //     f(<Foo as Trait>::func());
 // }
-fn call_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
+fn call_expr(p: &mut Parser, lhs: PrecedableMarker) -> PrecedableMarker {
     assert!(p.at(T!['(']));
     let m = lhs.precede(p);
     arg_list(p);
-    m.complete(p, CALL_EXPR)
+    m.complete_precedable(p, CALL_EXPR)
 }
 
 // test index_expr
 // fn foo() {
 //     x[1][2];
 // }
-fn index_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
+fn index_expr(p: &mut Parser, lhs: PrecedableMarker) -> PrecedableMarker {
     assert!(p.at(T!['[']));
     let m = lhs.precede(p);
     p.bump(T!['[']);
     expr(p);
     p.expect(T![']']);
-    m.complete(p, INDEX_EXPR)
+    m.complete_precedable(p, INDEX_EXPR)
 }
 
 // test method_call_expr
@@ -486,7 +487,7 @@ fn index_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
 //     x.foo();
 //     y.bar::<T>(1, 2,);
 // }
-fn method_call_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
+fn method_call_expr(p: &mut Parser, lhs: PrecedableMarker) -> PrecedableMarker {
     assert!(p.at(T![.]) && p.nth(1) == IDENT && (p.nth(2) == T!['('] || p.nth_at(2, T![::])));
     let m = lhs.precede(p);
     p.bump_any();
@@ -495,7 +496,7 @@ fn method_call_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
     if p.at(T!['(']) {
         arg_list(p);
     }
-    m.complete(p, METHOD_CALL_EXPR)
+    m.complete_precedable(p, METHOD_CALL_EXPR)
 }
 
 // test field_expr
@@ -512,7 +513,7 @@ fn method_call_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
 //     x.0x01;
 // }
 #[allow(clippy::if_same_then_else)]
-fn field_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
+fn field_expr(p: &mut Parser, lhs: PrecedableMarker) -> PrecedableMarker {
     assert!(p.at(T![.]));
     let m = lhs.precede(p);
     p.bump(T![.]);
@@ -524,18 +525,18 @@ fn field_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
     } else {
         p.error("expected field name or number")
     }
-    m.complete(p, FIELD_EXPR)
+    m.complete_precedable(p, FIELD_EXPR)
 }
 
 // test try_expr
 // fn foo() {
 //     x?;
 // }
-fn try_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
+fn try_expr(p: &mut Parser, lhs: PrecedableMarker) -> PrecedableMarker {
     assert!(p.at(T![?]));
     let m = lhs.precede(p);
     p.bump(T![?]);
-    m.complete(p, TRY_EXPR)
+    m.complete_precedable(p, TRY_EXPR)
 }
 
 // test cast_expr
@@ -545,34 +546,34 @@ fn try_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
 //     79 as i16 - 1;
 //     0x36 as u8 <= 0x37;
 // }
-fn cast_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
+fn cast_expr(p: &mut Parser, lhs: PrecedableMarker) -> PrecedableMarker {
     assert!(p.at(T![as]));
     let m = lhs.precede(p);
     p.bump(T![as]);
     // Use type_no_bounds(), because cast expressions are not
     // allowed to have bounds.
     types::type_no_bounds(p);
-    m.complete(p, CAST_EXPR)
+    m.complete_precedable(p, CAST_EXPR)
 }
 
 fn arg_list(p: &mut Parser) {
     assert!(p.at(T!['(']));
-    let m = p.start();
-    p.bump(T!['(']);
-    while !p.at(T![')']) && !p.at(EOF) {
-        // test arg_with_attr
-        // fn main() {
-        //     foo(#[attr] 92)
-        // }
-        if !expr_with_attrs(p) {
-            break;
+    p.with_sealed(ARG_LIST, |p| {
+        p.bump(T!['(']);
+        while !p.at(T![')']) && !p.at(EOF) {
+            // test arg_with_attr
+            // fn main() {
+            //     foo(#[attr] 92)
+            // }
+            if !expr_with_attrs(p) {
+                break;
+            }
+            if !p.at(T![')']) && !p.expect(T![,]) {
+                break;
+            }
         }
-        if !p.at(T![')']) && !p.expect(T![,]) {
-            break;
-        }
-    }
-    p.eat(T![')']);
-    m.complete(p, ARG_LIST);
+        p.eat(T![')']);
+    })
 }
 
 // test path_expr
@@ -582,20 +583,20 @@ fn arg_list(p: &mut Parser) {
 //     let _ = ::a::<b>;
 //     let _ = format!();
 // }
-fn path_expr(p: &mut Parser, r: Restrictions) -> (CompletedMarker, BlockLike) {
+fn path_expr(p: &mut Parser, r: Restrictions) -> (PrecedableMarker, BlockLike) {
     assert!(paths::is_path_start(p));
-    let m = p.start();
+    let m = p.start_precedable();
     paths::expr_path(p);
     match p.current() {
         T!['{'] if !r.forbid_structs => {
             record_field_list(p);
-            (m.complete(p, RECORD_LIT), BlockLike::NotBlock)
+            (m.complete_precedable(p, RECORD_LIT), BlockLike::NotBlock)
         }
         T![!] if !p.at(T![!=]) => {
             let block_like = items::macro_call_after_excl(p);
-            (m.complete(p, MACRO_CALL), block_like)
+            (m.complete_precedable(p, MACRO_CALL), block_like)
         }
-        _ => (m.complete(p, PATH_EXPR), BlockLike::NotBlock),
+        _ => (m.complete_precedable(p, PATH_EXPR), BlockLike::NotBlock),
     }
 }
 
@@ -629,7 +630,7 @@ pub(crate) fn record_field_list(p: &mut Parser) {
                     p.expect(T![:]);
                 }
                 expr(p);
-                m.complete(p, RECORD_FIELD);
+                m.complete_sealed(p, RECORD_FIELD);
             }
             T![.] if p.at(T![..]) => {
                 m.abandon(p);
@@ -650,5 +651,5 @@ pub(crate) fn record_field_list(p: &mut Parser) {
         }
     }
     p.expect(T!['}']);
-    m.complete(p, RECORD_FIELD_LIST);
+    m.complete_sealed(p, RECORD_FIELD_LIST);
 }

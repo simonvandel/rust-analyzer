@@ -1,6 +1,6 @@
 //! FIXME: write short doc here
 
-use std::cell::Cell;
+use std::{cell::Cell, marker::PhantomData, mem};
 
 use drop_bomb::DropBomb;
 
@@ -8,8 +8,9 @@ use crate::{
     event::Event,
     ParseError,
     SyntaxKind::{self, EOF, ERROR, TOMBSTONE},
-    TokenSet, TokenSource, T,
+    TokenSet, TokenSource, TreeSink, T,
 };
+use mem::transmute;
 
 /// `Parser` struct provides the low-level API for
 /// navigating through the stream of tokens and
@@ -24,15 +25,53 @@ pub(crate) struct Parser<'t> {
     token_source: &'t mut dyn TokenSource,
     events: Vec<Event>,
     steps: Cell<u32>,
+    f: fn(&mut Parser),
+    sink: &'t mut dyn TreeSink,
+    // whether to drain eagerly on new start node. This must only be true when we are not currently in any precedable environment
+    drain_options: DrainOption,
+    // Stack of indices where the buffering of events started. This starts with empty. When empty, events are eagerly drained. When non-empty, events are buffered
+    buffering_start_index: Vec<u32>,
+    forward_parents: Vec<SyntaxKind>,
+}
+
+#[derive(Eq, PartialEq)]
+enum Mode {
+    Eager,
+    Buffer,
+    Unset,
+}
+
+#[derive(Eq, PartialEq)]
+enum DrainOption {
+    Unset,
+    DrainOnStart,
+    DoNotDrainOnStart,
 }
 
 impl<'t> Parser<'t> {
-    pub(super) fn new(token_source: &'t mut dyn TokenSource) -> Parser<'t> {
-        Parser { token_source, events: Vec::new(), steps: Cell::new(0) }
+    pub(super) fn new(
+        token_source: &'t mut dyn TokenSource,
+        f: fn(&mut Parser),
+        sink: &'t mut dyn TreeSink,
+    ) -> Parser<'t> {
+        Parser {
+            token_source,
+            events: Vec::new(),
+            steps: Cell::new(0),
+            f,
+            sink,
+            drain_options: DrainOption::Unset,
+            buffering_start_index: Vec::new(),
+            forward_parents: Vec::new(),
+        }
     }
 
-    pub(crate) fn finish(self) -> Vec<Event> {
-        self.events
+    // TODO naming
+    pub(crate) fn finish(mut self) {
+        let f = self.f;
+        f(&mut self);
+        eprintln!("finishing with len: {} cap: {}", self.events.len(), self.events.capacity());
+        self.drain_events(0);
     }
 
     /// Returns the kind of the current token.
@@ -153,10 +192,145 @@ impl<'t> Parser<'t> {
     /// Starts a new node in the syntax tree. All nodes and tokens
     /// consumed between the `start` and the corresponding `Marker::complete`
     /// belong to the same node.
-    pub(crate) fn start(&mut self) -> Marker {
+    pub(crate) fn start(&mut self) -> Marker<Sealed> {
+        // TODO start should be discontinued, but for now be conservative and do not be eager
+
+        let m = self.start_internal();
+        self.set_buffered(&m);
+        m.into()
+    }
+
+    /// Starts a new node in the syntax tree. All nodes and tokens
+    /// consumed between the `start` and the corresponding `Marker::complete`
+    /// belong to the same node.
+    pub(crate) fn start_precedable(&mut self) -> Marker<Precedable> {
+        // TODO start should be discontinued, but for now be conservative and do not be eager
+
+        let m = self.start_internal();
+        self.set_buffered(&m);
+        m
+    }
+
+    pub(crate) fn start_not_precedable(&mut self) -> Marker<Sealed> {
+        eprintln!("start_not_precedable called ");
+        let mut m = self.start_internal();
+        // TODO can this be made with typestate?
+        m.set_only_completable();
+        m.into()
+    }
+
+    /// Starts a new node in the syntax tree. All nodes and tokens
+    /// consumed between the `start` and the corresponding `Marker::complete`
+    /// belong to the same node.
+    fn start_internal(&mut self) -> Marker<Precedable> {
+        eprintln!("start_internal called");
+
         let pos = self.events.len() as u32;
+        if self.drain_options == DrainOption::DrainOnStart {
+            // self.drain_events(pos)
+        }
+
         self.push_event(Event::tombstone());
-        Marker::new(pos)
+        Marker::<Precedable>::new(pos)
+    }
+
+    pub(crate) fn with_precedable_marker<F>(&mut self, f: F) -> PrecedableMarker
+    where
+        F: FnOnce(&mut Parser, Marker<Precedable>) -> PrecedableMarker,
+    {
+        eprintln!("with_precedable_marker called");
+
+        self.drain_options = DrainOption::DoNotDrainOnStart;
+        let m = self.start_internal();
+        self.set_buffered(&m);
+        f(self, m)
+    }
+
+    pub(crate) fn with_sealed<F>(&mut self, kind: SyntaxKind, f: F)
+    where
+        F: FnOnce(&mut Parser),
+    {
+        eprintln!("with_sealed called");
+        if self.drain_options == DrainOption::Unset {
+            self.drain_options = DrainOption::DrainOnStart;
+        }
+        // TODO: Sealed behøver vel ikke pos?
+        let mut m = Marker::<Sealed>::new(self.events.len() as u32);
+        // set the kind since we know it - this makes it possible to eagerly drain the events
+
+        let event = Event::Start { kind: kind, forward_parent: None };
+        self.push_event(event);
+        m.defuse();
+        let start_pos = m.pos;
+
+        // with_sealed guarantees that it is not possible to precede the marker, so we don't have to handle forward parents
+        // This also means that we can eagerly drain the events through the sink
+
+        f(self);
+
+        self.push_event(Event::Finish);
+        if self.buffering_start_index.is_empty() {
+            // self.drain_events(start_pos);
+        }
+    }
+
+    fn drain_events(&mut self, start_pos: u32) {
+        eprintln!("drain_events called ({}), ({})", start_pos, self.events.len());
+
+        for i in start_pos as usize..self.events.len() {
+            let e = mem::replace(&mut self.events[i], Event::tombstone());
+            self.process_event(e, i);
+        }
+
+        self.events.drain(start_pos as usize..self.events.len());
+
+        // TODO this can probably be removed
+        self.forward_parents.clear();
+    }
+
+    fn process_event(&mut self, e: Event, i: usize) {
+        match e {
+            Event::Start { kind: TOMBSTONE, .. } => (),
+
+            Event::Start { kind, forward_parent } => {
+                // For events[A, B, C], B is A's forward_parent, C is B's forward_parent,
+                // in the normal control flow, the parent-child relation: `A -> B -> C`,
+                // while with the magic forward_parent, it writes: `C <- B <- A`.
+
+                // append `A` into parents.
+                self.forward_parents.push(kind);
+                let mut idx = i;
+                let mut fp = forward_parent;
+                while let Some(fwd) = fp {
+                    idx += fwd as usize;
+                    // append `A`'s forward_parent `B`
+                    fp = match mem::replace(&mut self.events[idx], Event::tombstone()) {
+                        Event::Start { kind, forward_parent } => {
+                            if kind != TOMBSTONE {
+                                self.forward_parents.push(kind);
+                            }
+                            forward_parent
+                        }
+                        _ => unreachable!(),
+                    };
+                    // append `B`'s forward_parent `C` in the next stage.
+                }
+
+                for kind in self.forward_parents.drain(..).rev() {
+                    eprintln!("start_node kind: {:?}", kind);
+                    self.sink.start_node(kind);
+                }
+            }
+            Event::Finish => dbg!(self.sink.finish_node()),
+            Event::Token { kind, n_raw_tokens } => {
+                eprintln!("token kind: {:?} n_raw_tokens: {}", kind, n_raw_tokens);
+                self.sink.token(kind, n_raw_tokens);
+            }
+            Event::Error { msg } => {
+                eprintln!("error msg: {:?}", msg.clone());
+                self.sink.error(msg);
+            }
+        }
     }
 
     /// Consume the next token if `kind` matches.
@@ -226,10 +400,26 @@ impl<'t> Parser<'t> {
             return;
         }
 
-        let m = self.start();
+        let m = self.start_internal();
         self.error(message);
         self.bump_any();
-        m.complete(self, ERROR);
+        m.complete_sealed(self, ERROR);
+    }
+
+    fn pop_buffering_index(&mut self) -> u32 {
+        dbg!(self.buffering_start_index.pop().unwrap())
+    }
+
+    /// Mark the PrecedableMarker as sealed, so it cannot be preceded
+    pub(crate) fn seal(&mut self, _: PrecedableMarker) {
+        eprintln!("seal called");
+        let idx_to_drain_from = self.pop_buffering_index();
+
+        // the current marker is now sealed - if nothing is currently in buffereing mode, we can drain the events
+        if self.buffering_start_index.is_empty() {
+            debug_assert!(!self.events.is_empty());
+            self.drain_events(idx_to_drain_from)
+        }
     }
 
     fn do_bump(&mut self, kind: SyntaxKind, n_raw_tokens: u8) {
@@ -241,25 +431,121 @@ impl<'t> Parser<'t> {
     }
 
     fn push_event(&mut self, event: Event) {
-        self.events.push(event)
+        eprintln!("push_event called {:?}", event);
+        if self.buffering_start_index.is_empty() {
+            self.events.push(event);
+            self.drain_events(self.events.len() as u32)
+        // self.process_event(event, self.events.len());
+        } else {
+            self.events.push(event)
+        }
+    }
+
+    pub(crate) fn set_buffered<T: MarkerType>(&mut self, m: &Marker<T>) {
+        eprintln!("set_buffered {}", m.pos);
+        self.buffering_start_index.push(m.pos);
+    }
+}
+
+pub(crate) trait MarkerType {}
+
+pub(crate) struct Precedable;
+impl MarkerType for Precedable {}
+
+pub(crate) struct Sealed;
+impl MarkerType for Sealed {}
+
+impl From<Marker<Precedable>> for Marker<Sealed> {
+    fn from(x: Marker<Precedable>) -> Self {
+        unsafe { transmute(x) }
     }
 }
 
 /// See `Parser::start`.
-pub(crate) struct Marker {
+pub(crate) struct Marker<T>
+where
+    T: MarkerType,
+{
     pos: u32,
     bomb: DropBomb,
+    only_completable: bool,
+    t: PhantomData<T>,
 }
 
-impl Marker {
-    fn new(pos: u32) -> Marker {
-        Marker { pos, bomb: DropBomb::new("Marker must be either completed or abandoned") }
+impl<T: MarkerType> Marker<T> {
+    fn new(pos: u32) -> Marker<T> {
+        Marker {
+            pos,
+            bomb: DropBomb::new("Marker must be either completed or abandoned"),
+            only_completable: true,
+            t: Default::default(),
+        }
+    }
+
+    pub(crate) fn set_only_completable(&mut self) {
+        self.only_completable = false;
+    }
+
+    pub(crate) fn defuse(&mut self) {
+        self.bomb.defuse();
     }
 
     /// Finishes the syntax tree node and assigns `kind` to it,
     /// and mark the create a `CompletedMarker` for possible future
     /// operation like `.precede()` to deal with forward_parent.
-    pub(crate) fn complete(mut self, p: &mut Parser, kind: SyntaxKind) -> CompletedMarker {
+    pub(crate) fn complete_sealed(mut self, p: &mut Parser, kind: SyntaxKind) {
+        eprintln!("complete_sealed called kind: {:?}", kind);
+        self.bomb.defuse();
+        let idx = self.pos as usize;
+        match p.events[idx] {
+            Event::Start { kind: ref mut slot, .. } => {
+                *slot = kind;
+            }
+            _ => unreachable!(),
+        }
+        p.push_event(Event::Finish);
+        // since the marker is sealed, we know that precede will not be called on this marker
+        // so we can drain all events from the start of this marker to the event
+        // p.drain_events(self.pos);
+        if p.buffering_start_index.is_empty() {
+            debug_assert!(!p.events.is_empty());
+            p.drain_events(self.pos);
+        }
+    }
+
+    // TODO: lige nu er precedable unbounded. Hvordan kan man markere at den er død?
+    // TODO: idé: on drop, use unsafe ptr to get parser
+
+    /// Abandons the syntax tree node. All its children
+    /// are attached to its parent instead.
+    pub(crate) fn abandon(mut self, p: &mut Parser) {
+        if !self.only_completable {
+            panic!("You cannot abondon this marker");
+        }
+        self.bomb.defuse();
+        let idx = self.pos as usize;
+        if idx == p.events.len() - 1 {
+            match p.events.pop() {
+                Some(Event::Start { kind: TOMBSTONE, forward_parent: None }) => (),
+                _ => unreachable!(),
+            }
+        }
+        // p.drain_events(self.pos);
+    }
+}
+
+impl Marker<Precedable> {
+    /// Finishes the syntax tree node and assigns `kind` to it,
+    /// and mark the create a `CompletedMarker` for possible future
+    /// operation like `.precede()` to deal with forward_parent.
+    pub(crate) fn complete_precedable(
+        mut self,
+        p: &mut Parser,
+        kind: SyntaxKind,
+    ) -> PrecedableMarker {
+        if !self.only_completable {
+            panic!("You cannot make this marker precedable")
+        }
         self.bomb.defuse();
         let idx = self.pos as usize;
         match p.events[idx] {
@@ -270,33 +556,42 @@ impl Marker {
         }
         let finish_pos = p.events.len() as u32;
         p.push_event(Event::Finish);
-        CompletedMarker::new(self.pos, finish_pos, kind)
-    }
-
-    /// Abandons the syntax tree node. All its children
-    /// are attached to its parent instead.
-    pub(crate) fn abandon(mut self, p: &mut Parser) {
-        self.bomb.defuse();
-        let idx = self.pos as usize;
-        if idx == p.events.len() - 1 {
-            match p.events.pop() {
-                Some(Event::Start { kind: TOMBSTONE, forward_parent: None }) => (),
-                _ => unreachable!(),
-            }
-        }
+        PrecedableMarker::new(self.pos, finish_pos, kind)
     }
 }
 
-pub(crate) struct CompletedMarker {
+#[must_use = "parser.seal() has to be called"]
+pub(crate) struct PrecedableMarker {
     start_pos: u32,
     finish_pos: u32,
     kind: SyntaxKind,
 }
 
-impl CompletedMarker {
+impl PrecedableMarker {
     fn new(start_pos: u32, finish_pos: u32, kind: SyntaxKind) -> Self {
-        CompletedMarker { start_pos, finish_pos, kind }
+        PrecedableMarker { start_pos, finish_pos, kind }
     }
+
+    // TODO svs: skal løses:
+    // - events må ikke være unbounded
+    // - det skal være muligt at løbende sende noget til sink
+    // - precede er problemet - den gør at vi ikke bare kan sende alle events med det samme til sink
+    // - ide: with_sealed skal eagerly sende til sink.
+    // - start, eat, start
+    // - når complete_sealed kaldes, skal alt mellem start og marker end draines
+    // - kan man kalde start og så start, hvor den første start dør før?
+    // ide: når start() kaldes, så drain alt
+    // problem:
+    //  start1
+    //      eat
+    //      start2
+    //      precede(start2)
+    //
+    //
+    //  with_sealed kan eagerly sendes til sink
+    // with_precedable tilføjes der blot til events.
+    //  Denne kan først draines når der ikke længere kan kaldes precede på den.
+    //  Sæt must_use på procedable_marker, så man altid skal kalde parser.seal()
 
     /// This method allows to create a new node which starts
     /// *before* the current one. That is, parser could start
@@ -310,8 +605,11 @@ impl CompletedMarker {
     /// Append a new `START` events as `[START, FINISH, NEWSTART]`,
     /// then mark `NEWSTART` as `START`'s parent with saving its relative
     /// distance to `NEWSTART` into forward_parent(=2 in this case);
-    pub(crate) fn precede(self, p: &mut Parser) -> Marker {
-        let new_pos = p.start();
+    pub(crate) fn precede(self, p: &mut Parser) -> Marker<Precedable> {
+        // TODO: precede design: can it be simpler? the forward_parent should be removed in favor of prepending the new parent event in the current list of events
+
+        let new_pos = p.start_internal();
+        p.set_buffered(&new_pos);
         let idx = self.start_pos as usize;
         match p.events[idx] {
             Event::Start { ref mut forward_parent, .. } => {
@@ -323,7 +621,7 @@ impl CompletedMarker {
     }
 
     /// Undo this completion and turns into a `Marker`
-    pub(crate) fn undo_completion(self, p: &mut Parser) -> Marker {
+    pub(crate) fn undo_completion(self, p: &mut Parser) -> Marker<Sealed> {
         let start_idx = self.start_pos as usize;
         let finish_idx = self.finish_pos as usize;
         match p.events[start_idx] {
@@ -334,7 +632,7 @@ impl CompletedMarker {
             ref mut slot @ Event::Finish => *slot = Event::tombstone(),
             _ => unreachable!(),
         }
-        Marker::new(self.start_pos)
+        Marker::<Sealed>::new(self.start_pos)
     }
 
     pub(crate) fn kind(&self) -> SyntaxKind {

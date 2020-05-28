@@ -12,6 +12,7 @@ pub(crate) use self::{
     use_item::use_tree_list,
 };
 use super::*;
+use crate::parser::Sealed;
 
 // test mod_contents
 // fn foo() {}
@@ -58,7 +59,7 @@ pub(super) fn item_or_macro(p: &mut Parser, stop_on_r_curly: bool, flavor: ItemF
                 p.expect(T![;]);
             }
         }
-        m.complete(p, MACRO_CALL);
+        m.complete_sealed(p, MACRO_CALL);
     } else {
         m.abandon(p);
         if p.at(T!['{']) {
@@ -67,7 +68,7 @@ pub(super) fn item_or_macro(p: &mut Parser, stop_on_r_curly: bool, flavor: ItemF
             let e = p.start();
             p.error("unmatched `}`");
             p.bump(T!['}']);
-            e.complete(p, ERROR);
+            e.complete_sealed(p, ERROR);
         } else if !p.at(EOF) && !p.at(T!['}']) {
             p.err_and_bump("expected an item");
         } else {
@@ -76,7 +77,11 @@ pub(super) fn item_or_macro(p: &mut Parser, stop_on_r_curly: bool, flavor: ItemF
     }
 }
 
-pub(super) fn maybe_item(p: &mut Parser, m: Marker, flavor: ItemFlavor) -> Result<(), Marker> {
+pub(super) fn maybe_item(
+    p: &mut Parser,
+    m: Marker<Sealed>,
+    flavor: ItemFlavor,
+) -> Result<(), Marker<Sealed>> {
     // test_err pub_expr
     // fn foo() { pub 92; }
     let has_visibility = opt_visibility(p);
@@ -175,7 +180,7 @@ pub(super) fn maybe_item(p: &mut Parser, m: Marker, flavor: ItemFlavor) -> Resul
         // unsafe const fn bar() {}
         T![fn] => {
             fn_def(p);
-            m.complete(p, FN_DEF);
+            m.complete_sealed(p, FN_DEF);
         }
 
         // test unsafe_trait
@@ -188,7 +193,7 @@ pub(super) fn maybe_item(p: &mut Parser, m: Marker, flavor: ItemFlavor) -> Resul
         // unsafe auto trait T {}
         T![trait] => {
             traits::trait_def(p);
-            m.complete(p, TRAIT_DEF);
+            m.complete_sealed(p, TRAIT_DEF);
         }
 
         // test unsafe_impl
@@ -216,7 +221,7 @@ pub(super) fn maybe_item(p: &mut Parser, m: Marker, flavor: ItemFlavor) -> Resul
         // unsafe default impl Foo {}
         T![impl] => {
             traits::impl_def(p);
-            m.complete(p, IMPL_DEF);
+            m.complete_sealed(p, IMPL_DEF);
         }
 
         // test existential_type
@@ -226,21 +231,21 @@ pub(super) fn maybe_item(p: &mut Parser, m: Marker, flavor: ItemFlavor) -> Resul
         }
         _ => {
             if !has_visibility && !has_mods {
-                return Err(m);
+                return Err(m.into());
             } else {
                 if has_mods {
                     p.error("expected existential, fn, trait or impl");
                 } else {
                     p.error("expected an item");
                 }
-                m.complete(p, ERROR);
+                m.complete_sealed(p, ERROR);
             }
         }
     }
     Ok(())
 }
 
-fn items_without_modifiers(p: &mut Parser, m: Marker) -> Result<(), Marker> {
+fn items_without_modifiers(p: &mut Parser, m: Marker<Sealed>) -> Result<(), Marker<Sealed>> {
     let la = p.nth(1);
     match p.current() {
         // test extern_crate
@@ -287,14 +292,14 @@ fn items_without_modifiers(p: &mut Parser, m: Marker) -> Result<(), Marker> {
         {
             abi(p);
             extern_item_list(p);
-            m.complete(p, EXTERN_BLOCK);
+            m.complete_sealed(p, EXTERN_BLOCK);
         }
         _ => return Err(m),
     };
     Ok(())
 }
 
-fn extern_crate_item(p: &mut Parser, m: Marker) {
+fn extern_crate_item(p: &mut Parser, m: Marker<Sealed>) {
     assert!(p.at(T![extern]));
     p.bump(T![extern]);
     assert!(p.at(T![crate]));
@@ -302,7 +307,7 @@ fn extern_crate_item(p: &mut Parser, m: Marker) {
     name_ref(p);
     opt_alias(p);
     p.expect(T![;]);
-    m.complete(p, EXTERN_CRATE_ITEM);
+    m.complete_sealed(p, EXTERN_CRATE_ITEM);
 }
 
 pub(crate) fn extern_item_list(p: &mut Parser) {
@@ -311,7 +316,7 @@ pub(crate) fn extern_item_list(p: &mut Parser) {
     p.bump(T!['{']);
     mod_contents(p, true);
     p.expect(T!['}']);
-    m.complete(p, EXTERN_ITEM_LIST);
+    m.complete_sealed(p, EXTERN_ITEM_LIST);
 }
 
 fn fn_def(p: &mut Parser) {
@@ -348,7 +353,7 @@ fn fn_def(p: &mut Parser) {
 
 // test type_item
 // type Foo = Bar;
-fn type_def(p: &mut Parser, m: Marker) {
+fn type_def(p: &mut Parser, m: Marker<Sealed>) {
     assert!(p.at(T![type]));
     p.bump(T![type]);
 
@@ -369,10 +374,10 @@ fn type_def(p: &mut Parser, m: Marker) {
         types::type_(p);
     }
     p.expect(T![;]);
-    m.complete(p, TYPE_ALIAS_DEF);
+    m.complete_sealed(p, TYPE_ALIAS_DEF);
 }
 
-pub(crate) fn mod_item(p: &mut Parser, m: Marker) {
+pub(crate) fn mod_item(p: &mut Parser, m: Marker<Sealed>) {
     assert!(p.at(T![mod]));
     p.bump(T![mod]);
 
@@ -382,7 +387,7 @@ pub(crate) fn mod_item(p: &mut Parser, m: Marker) {
     } else if !p.eat(T![;]) {
         p.error("expected `;` or `{`");
     }
-    m.complete(p, MODULE);
+    m.complete_sealed(p, MODULE);
 }
 
 pub(crate) fn mod_item_list(p: &mut Parser) {
@@ -391,13 +396,13 @@ pub(crate) fn mod_item_list(p: &mut Parser) {
     p.bump(T!['{']);
     mod_contents(p, true);
     p.expect(T!['}']);
-    m.complete(p, ITEM_LIST);
+    m.complete_sealed(p, ITEM_LIST);
 }
 
 // test macro_def
 // macro m { ($i:ident) => {} }
 // macro m($i:ident) {}
-fn macro_def(p: &mut Parser, m: Marker) {
+fn macro_def(p: &mut Parser, m: Marker<Sealed>) {
     p.expect(T![macro]);
     name_r(p, ITEM_RECOVERY_SET);
     if p.at(T!['{']) {
@@ -411,10 +416,10 @@ fn macro_def(p: &mut Parser, m: Marker) {
             T!['{'] | T!['['] | T!['('] => token_tree(p),
             _ => p.error("expected `{`, `[`, `(`"),
         }
-        m.complete(p, TOKEN_TREE);
+        m.complete_sealed(p, TOKEN_TREE);
     }
 
-    m.complete(p, MACRO_DEF);
+    m.complete_sealed(p, MACRO_DEF);
 }
 
 fn macro_call(p: &mut Parser) -> BlockLike {
@@ -436,7 +441,7 @@ pub(super) fn macro_call_after_excl(p: &mut Parser) -> BlockLike {
     if p.at(T![try]) {
         let m = p.start();
         p.bump_remap(IDENT);
-        m.complete(p, NAME);
+        m.complete_sealed(p, NAME);
     }
 
     match p.current() {
@@ -469,7 +474,7 @@ pub(crate) fn token_tree(p: &mut Parser) {
             T!['{'] | T!['('] | T!['['] => token_tree(p),
             T!['}'] => {
                 p.error("unmatched `}`");
-                m.complete(p, TOKEN_TREE);
+                m.complete_sealed(p, TOKEN_TREE);
                 return;
             }
             T![')'] | T![']'] => p.err_and_bump("unmatched brace"),
@@ -477,5 +482,5 @@ pub(crate) fn token_tree(p: &mut Parser) {
         }
     }
     p.expect(closing_paren_kind);
-    m.complete(p, TOKEN_TREE);
+    m.complete_sealed(p, TOKEN_TREE);
 }

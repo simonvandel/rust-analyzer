@@ -2,12 +2,12 @@
 
 use super::*;
 
-pub(super) fn use_item(p: &mut Parser, m: Marker) {
+pub(super) fn use_item(p: &mut Parser, m: Marker<Sealed>) {
     assert!(p.at(T![use]));
     p.bump(T![use]);
     use_tree(p, true);
     p.expect(T![;]);
-    m.complete(p, USE_ITEM);
+    m.complete_sealed(p, USE_ITEM);
 }
 
 /// Parse a use 'tree', such as `some::path` in `use some::path;`
@@ -114,7 +114,7 @@ fn use_tree(p: &mut Parser, top_level: bool) {
             return;
         }
     }
-    m.complete(p, USE_TREE);
+    m.complete_sealed(p, USE_TREE);
 }
 
 pub(crate) fn use_tree_list(p: &mut Parser) {
@@ -128,5 +128,5 @@ pub(crate) fn use_tree_list(p: &mut Parser) {
         }
     }
     p.expect(T!['}']);
-    m.complete(p, USE_TREE_LIST);
+    m.complete_sealed(p, USE_TREE_LIST);
 }

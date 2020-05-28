@@ -84,7 +84,7 @@ fn paren_or_tuple_type(p: &mut Parser) {
         // type T = (i32,);
         TUPLE_TYPE
     };
-    m.complete(p, kind);
+    m.complete_sealed(p, kind);
 }
 
 // test never_type
@@ -93,7 +93,7 @@ fn never_type(p: &mut Parser) {
     assert!(p.at(T![!]));
     let m = p.start();
     p.bump(T![!]);
-    m.complete(p, NEVER_TYPE);
+    m.complete_sealed(p, NEVER_TYPE);
 }
 
 fn pointer_type(p: &mut Parser) {
@@ -117,7 +117,7 @@ fn pointer_type(p: &mut Parser) {
     };
 
     type_no_bounds(p);
-    m.complete(p, POINTER_TYPE);
+    m.complete_sealed(p, POINTER_TYPE);
 }
 
 fn array_or_slice_type(p: &mut Parser) {
@@ -149,7 +149,7 @@ fn array_or_slice_type(p: &mut Parser) {
             SLICE_TYPE
         }
     };
-    m.complete(p, kind);
+    m.complete_sealed(p, kind);
 }
 
 // test reference_type;
@@ -163,7 +163,7 @@ fn reference_type(p: &mut Parser) {
     p.eat(LIFETIME);
     p.eat(T![mut]);
     type_no_bounds(p);
-    m.complete(p, REFERENCE_TYPE);
+    m.complete_sealed(p, REFERENCE_TYPE);
 }
 
 // test placeholder_type
@@ -172,7 +172,7 @@ fn placeholder_type(p: &mut Parser) {
     assert!(p.at(T![_]));
     let m = p.start();
     p.bump(T![_]);
-    m.complete(p, PLACEHOLDER_TYPE);
+    m.complete_sealed(p, PLACEHOLDER_TYPE);
 }
 
 // test fn_pointer_type
@@ -201,7 +201,7 @@ fn fn_pointer_type(p: &mut Parser) {
     // test fn_pointer_type_with_ret
     // type F = fn() -> ();
     opt_fn_ret_type(p);
-    m.complete(p, FN_POINTER_TYPE);
+    m.complete_sealed(p, FN_POINTER_TYPE);
 }
 
 pub(super) fn for_binder(p: &mut Parser) {
@@ -229,7 +229,7 @@ pub(super) fn for_type(p: &mut Parser) {
         _ if paths::is_path_start(p) => path_type_(p, false),
         _ => p.error("expected a path"),
     }
-    m.complete(p, FOR_TYPE);
+    m.complete_sealed(p, FOR_TYPE);
 }
 
 // test impl_trait_type
@@ -239,7 +239,7 @@ fn impl_trait_type(p: &mut Parser) {
     let m = p.start();
     p.bump(T![impl]);
     type_params::bounds_without_colon(p);
-    m.complete(p, IMPL_TRAIT_TYPE);
+    m.complete_sealed(p, IMPL_TRAIT_TYPE);
 }
 
 // test dyn_trait_type
@@ -249,7 +249,7 @@ fn dyn_trait_type(p: &mut Parser) {
     let m = p.start();
     p.bump(T![dyn]);
     type_params::bounds_without_colon(p);
-    m.complete(p, DYN_TRAIT_TYPE);
+    m.complete_sealed(p, DYN_TRAIT_TYPE);
 }
 
 // test path_type
@@ -266,7 +266,7 @@ pub(super) fn path_type(p: &mut Parser) {
 // type B = crate::foo!();
 fn path_or_macro_type_(p: &mut Parser, allow_bounds: bool) {
     assert!(paths::is_path_start(p));
-    let m = p.start();
+    let m = p.start_precedable();
     paths::type_path(p);
 
     let kind = if p.at(T![!]) && !p.at(T![!=]) {
@@ -276,7 +276,7 @@ fn path_or_macro_type_(p: &mut Parser, allow_bounds: bool) {
         PATH_TYPE
     };
 
-    let path = m.complete(p, kind);
+    let path = m.complete_precedable(p, kind);
 
     if allow_bounds {
         opt_path_type_bounds_as_dyn_trait_type(p, path);
@@ -285,13 +285,13 @@ fn path_or_macro_type_(p: &mut Parser, allow_bounds: bool) {
 
 pub(super) fn path_type_(p: &mut Parser, allow_bounds: bool) {
     assert!(paths::is_path_start(p));
-    let m = p.start();
+    let m = p.start_precedable();
     paths::type_path(p);
 
     // test path_type_with_bounds
     // fn foo() -> Box<T + 'f> {}
     // fn foo() -> Box<dyn T + 'f> {}
-    let path = m.complete(p, PATH_TYPE);
+    let path = m.complete_precedable(p, PATH_TYPE);
     if allow_bounds {
         opt_path_type_bounds_as_dyn_trait_type(p, path);
     }
@@ -299,13 +299,13 @@ pub(super) fn path_type_(p: &mut Parser, allow_bounds: bool) {
 
 /// This turns a parsed PATH_TYPE optionally into a DYN_TRAIT_TYPE
 /// with a TYPE_BOUND_LIST
-fn opt_path_type_bounds_as_dyn_trait_type(p: &mut Parser, path_type_marker: CompletedMarker) {
+fn opt_path_type_bounds_as_dyn_trait_type(p: &mut Parser, path_type_marker: PrecedableMarker) {
     if !p.at(T![+]) {
         return;
     }
 
     // First create a TYPE_BOUND from the completed PATH_TYPE
-    let m = path_type_marker.precede(p).complete(p, TYPE_BOUND);
+    let m = path_type_marker.precede(p).complete_precedable(p, TYPE_BOUND);
 
     // Next setup a marker for the TYPE_BOUND_LIST
     let m = m.precede(p);
@@ -318,5 +318,5 @@ fn opt_path_type_bounds_as_dyn_trait_type(p: &mut Parser, path_type_marker: Comp
     let m = type_params::bounds_without_colon_m(p, m);
 
     // Finally precede everything with DYN_TRAIT_TYPE
-    m.precede(p).complete(p, DYN_TRAIT_TYPE);
+    m.precede(p).complete_sealed(p, DYN_TRAIT_TYPE);
 }

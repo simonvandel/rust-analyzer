@@ -37,9 +37,9 @@ enum Mode {
 }
 
 fn path(p: &mut Parser, mode: Mode) {
-    let path = p.start();
+    let path = p.start_precedable();
     path_segment(p, mode, true);
-    let mut qual = path.complete(p, PATH);
+    let mut qual = path.complete_precedable(p, PATH);
     loop {
         let use_tree = match p.nth(2) {
             T![*] | T!['{'] => true,
@@ -49,7 +49,7 @@ fn path(p: &mut Parser, mode: Mode) {
             let path = qual.precede(p);
             p.bump(T![::]);
             path_segment(p, mode, false);
-            let path = path.complete(p, PATH);
+            let path = path.complete_precedable(p, PATH);
             qual = path;
         } else {
             break;
@@ -58,38 +58,38 @@ fn path(p: &mut Parser, mode: Mode) {
 }
 
 fn path_segment(p: &mut Parser, mode: Mode, first: bool) {
-    let m = p.start();
-    // test qual_paths
-    // type X = <A as B>::Output;
-    // fn foo() { <usize as Default>::default(); }
-    if first && p.eat(T![<]) {
-        types::type_(p);
-        if p.eat(T![as]) {
-            if is_use_path_start(p) {
-                types::path_type(p);
-            } else {
-                p.error("expected a trait");
+    p.with_sealed(PATH_SEGMENT, |p| {
+        // test qual_paths
+        // type X = <A as B>::Output;
+        // fn foo() { <usize as Default>::default(); }
+        if first && p.eat(T![<]) {
+            types::type_(p);
+            if p.eat(T![as]) {
+                if is_use_path_start(p) {
+                    types::path_type(p);
+                } else {
+                    p.error("expected a trait");
+                }
             }
+            p.expect(T![>]);
+        } else {
+            if first {
+                p.eat(T![::]);
+            }
+            match p.current() {
+                IDENT => {
+                    name_ref(p);
+                    opt_path_type_args(p, mode);
+                }
+                // test crate_path
+                // use crate::foo;
+                T![self] | T![super] | T![crate] => p.bump_any(),
+                _ => {
+                    p.err_recover("expected identifier", items::ITEM_RECOVERY_SET);
+                }
+            };
         }
-        p.expect(T![>]);
-    } else {
-        if first {
-            p.eat(T![::]);
-        }
-        match p.current() {
-            IDENT => {
-                name_ref(p);
-                opt_path_type_args(p, mode);
-            }
-            // test crate_path
-            // use crate::foo;
-            T![self] | T![super] | T![crate] => p.bump_any(),
-            _ => {
-                p.err_recover("expected identifier", items::ITEM_RECOVERY_SET);
-            }
-        };
-    }
-    m.complete(p, PATH_SEGMENT);
+    });
 }
 
 fn opt_path_type_args(p: &mut Parser, mode: Mode) {

@@ -70,7 +70,7 @@ fn list_(p: &mut Parser, flavor: Flavor) {
     }
 
     p.expect(ket);
-    m.complete(p, PARAM_LIST);
+    m.complete_sealed(p, PARAM_LIST);
 }
 
 const VALUE_PARAMETER_FIRST: TokenSet = patterns::PATTERN_FIRST.union(types::TYPE_FIRST);
@@ -129,7 +129,7 @@ fn value_parameter(p: &mut Parser, flavor: Flavor) -> Variadic {
             }
         }
     }
-    m.complete(p, PARAM);
+    m.complete_sealed(p, PARAM);
     res
 }
 
@@ -181,7 +181,7 @@ fn opt_self_param(p: &mut Parser) {
             p.bump_any();
         }
     }
-    m.complete(p, SELF_PARAM);
+    m.complete_sealed(p, SELF_PARAM);
     if !p.at(T![')']) {
         p.expect(T![,]);
     }

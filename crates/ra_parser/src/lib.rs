@@ -22,6 +22,7 @@ mod grammar;
 
 pub(crate) use token_set::TokenSet;
 
+use parser::Parser;
 pub use syntax_kind::SyntaxKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -68,14 +69,13 @@ pub trait TreeSink {
     fn error(&mut self, error: ParseError);
 }
 
-fn parse_from_tokens<F>(token_source: &mut dyn TokenSource, tree_sink: &mut dyn TreeSink, f: F)
-where
-    F: FnOnce(&mut parser::Parser),
-{
-    let mut p = parser::Parser::new(token_source);
-    f(&mut p);
-    let events = p.finish();
-    event::process(tree_sink, events);
+fn parse_from_tokens(
+    token_source: &mut dyn TokenSource,
+    tree_sink: &mut dyn TreeSink,
+    f: fn(&mut Parser),
+) {
+    let p = parser::Parser::new(token_source, f, tree_sink);
+    p.finish();
 }
 
 /// Parse given tokens into the given sink as a rust file.
@@ -106,7 +106,7 @@ pub fn parse_fragment(
     tree_sink: &mut dyn TreeSink,
     fragment_kind: FragmentKind,
 ) {
-    let parser: fn(&'_ mut parser::Parser) = match fragment_kind {
+    let parser = match fragment_kind {
         FragmentKind::Path => grammar::fragments::path,
         FragmentKind::Expr => grammar::fragments::expr,
         FragmentKind::Type => grammar::fragments::type_,
@@ -141,9 +141,7 @@ impl Reparser {
     /// sequence.
     pub fn parse(self, token_source: &mut dyn TokenSource, tree_sink: &mut dyn TreeSink) {
         let Reparser(r) = self;
-        let mut p = parser::Parser::new(token_source);
-        r(&mut p);
-        let events = p.finish();
-        event::process(tree_sink, events);
+        let p = parser::Parser::new(token_source, r, tree_sink);
+        p.finish();
     }
 }
