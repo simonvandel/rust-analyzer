@@ -468,8 +468,11 @@ impl<T: MarkerType> Drop for Marker<T> {
         let p_ptr = self.parser_ptr as *mut Parser;
         unsafe {
             // TODO svs: det virker ikke hvis dette kode er inde. Illegal instruction - måske aliasing
-            // let p = &mut (*p_ptr);
-            // p.seal_current()
+            let p = &mut (*p_ptr);
+            // we only want to pop the stack if this marker was created buffered
+            if p.buffering_start_index.last().map_or(false, |x| *x == self.pos) {
+                p.seal_current()
+            }
         }
     }
 }
@@ -515,10 +518,10 @@ impl<T: MarkerType> Marker<T> {
 
         // since the marker is sealed, we know that precede will not be called on this marker
         // so we can drain all events from the start of this marker to the event
-        if p.buffering_start_index.is_empty() {
-            debug_assert!(!p.events.is_empty());
-            p.drain_events(self.pos);
-        }
+        // if p.buffering_start_index.is_empty() {
+        //     debug_assert!(!p.events.is_empty());
+        //     p.drain_events(self.pos);
+        // }
     }
 
     // TODO: lige nu er precedable unbounded. Hvordan kan man markere at den er død?
@@ -541,6 +544,9 @@ impl<T: MarkerType> Marker<T> {
         // p.drain_events(self.pos);
     }
 }
+
+// TODO ved new af Marker<Sealed>, så ikke push til buffering stack, ikke kør drop af pop buffering steack
+// TODO ved new af Marker<Precedable>, så push til buffering stack, kør drop af pop buffering steack
 
 impl Marker<Precedable> {
     /// Finishes the syntax tree node and assigns `kind` to it,
