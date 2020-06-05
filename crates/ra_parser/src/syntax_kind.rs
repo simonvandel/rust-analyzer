@@ -19,6 +19,7 @@ impl From<SyntaxKind> for u16 {
 }
 
 impl SyntaxKind {
+    #[inline]
     pub fn is_trivia(self) -> bool {
         match self {
             SyntaxKind::WHITESPACE | SyntaxKind::COMMENT => true,
