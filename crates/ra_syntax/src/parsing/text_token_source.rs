@@ -4,7 +4,7 @@ use ra_parser::Token as PToken;
 use ra_parser::TokenSource;
 
 use crate::{parsing::lexer::Token, SyntaxKind::EOF, TextRange, TextSize};
-use std::cell::RefCell;
+use std::cell::Cell;
 
 pub(crate) struct TextTokenSource<'t> {
     text: &'t str,
@@ -23,33 +23,40 @@ pub(crate) struct TextTokenSource<'t> {
     curr_token: Option<&'t Token>,
     curr_ptoken: PToken,
     raw_tokens: &'t [Token],
-    lookahead_1: RefCell<Option<PToken>>,
-    lookahead_2: RefCell<Option<PToken>>,
+    lookahead_1: Cell<Option<PToken>>,
+    lookahead_2: Cell<Option<PToken>>,
+    lookahead_3: Cell<Option<PToken>>,
 }
 
 impl<'t> TokenSource for TextTokenSource<'t> {
+    #[inline]
     fn current(&self) -> PToken {
         self.curr_ptoken
     }
 
+    #[inline]
     fn lookahead_nth(&self, n: usize) -> PToken {
+        let cache = |lookahead_n: &Cell<Option<PToken>>| {
+            let existing = lookahead_n.get();
+            if let Some(x) = existing {
+                x
+            } else {
+                let new = self.get_token(n).0;
+                lookahead_n.set(Some(new));
+                new
+            }
+        };
         // eprintln!("lookahead_nth {}", n);
         match n {
             0 => self.current(),
-            1 => {
-                let new = self.lookahead_1.borrow().unwrap_or_else(|| self.get_token(n).0);
-                self.lookahead_1.replace(Some(new));
-                self.lookahead_1.borrow().unwrap()
-            }
-            2 => {
-                let new = self.lookahead_2.borrow().unwrap_or_else(|| self.get_token(n).0);
-                self.lookahead_2.replace(Some(new));
-                self.lookahead_2.borrow().unwrap()
-            }
+            1 => cache(&self.lookahead_1),
+            2 => cache(&self.lookahead_2),
+            3 => cache(&self.lookahead_3),
             _ => self.get_token(n).0,
         }
     }
 
+    #[inline]
     fn bump(&mut self) {
         if self.curr_ptoken.kind == EOF {
             return;
@@ -60,7 +67,7 @@ impl<'t> TokenSource for TextTokenSource<'t> {
         self.curr_token_idx = new_idx;
         self.curr_text_offset = new_offset;
         // trickle down the lookahead as we just bump'ed
-        *self.lookahead_1.borrow_mut() = self.lookahead_2.replace(None);
+        self.lookahead_1.set(self.lookahead_2.replace(self.lookahead_3.replace(None)));
     }
 
     fn is_keyword(&self, kw: &str) -> bool {
@@ -84,8 +91,9 @@ impl<'t> TextTokenSource<'t> {
             curr_token_idx: 0,
             curr_text_offset: 0.into(),
             curr_token: raw_tokens.get(0),
-            lookahead_1: RefCell::new(None),
-            lookahead_2: RefCell::new(None),
+            lookahead_1: Cell::new(None),
+            lookahead_2: Cell::new(None),
+            lookahead_3: Cell::new(None),
         };
         let get_token_res = ret.get_token(0);
         ret.curr_ptoken = get_token_res.0;
