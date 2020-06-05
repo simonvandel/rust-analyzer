@@ -38,7 +38,7 @@ pub(super) fn pattern_top_r(p: &mut Parser, recovery_set: TokenSet) {
 //     }
 // }
 fn pattern_r(p: &mut Parser, recovery_set: TokenSet) {
-    let m = p.start();
+    let m = p.start_precedable();
     pattern_single_r(p, recovery_set);
 
     if !p.at(T![|]) {
@@ -190,46 +190,44 @@ fn tuple_pat_fields(p: &mut Parser) {
 // }
 fn record_field_pat_list(p: &mut Parser) {
     assert!(p.at(T!['{']));
-    let m = p.start();
-    p.bump(T!['{']);
-    while !p.at(EOF) && !p.at(T!['}']) {
-        match p.current() {
-            // A trailing `..` is *not* treated as a DOT_DOT_PAT.
-            T![.] if p.at(T![..]) => p.bump(T![..]),
-            T!['{'] => error_block(p, "expected ident"),
+    p.with_sealed(RECORD_FIELD_PAT_LIST, |p| {
+        p.bump(T!['{']);
+        while !p.at(EOF) && !p.at(T!['}']) {
+            match p.current() {
+                // A trailing `..` is *not* treated as a DOT_DOT_PAT.
+                T![.] if p.at(T![..]) => p.bump(T![..]),
+                T!['{'] => error_block(p, "expected ident"),
 
-            c => {
-                let m = p.start();
-                match c {
-                    // test record_field_pat
-                    // fn foo() {
-                    //     let S { 0: 1 } = ();
-                    //     let S { x: 1 } = ();
-                    // }
-                    IDENT | INT_NUMBER if p.nth(1) == T![:] => {
-                        name_ref_or_index(p);
-                        p.bump(T![:]);
-                        pattern(p);
-                    }
-                    T![box] => {
-                        // FIXME: not all box patterns should be allowed
-                        let pm = box_pat(p);
-                        p.seal(pm);
-                    }
-                    _ => {
-                        let pm = bind_pat(p, false);
-                        p.seal(pm);
-                    }
+                c => {
+                    p.with_sealed(RECORD_FIELD_PAT, |p| {
+                        match c {
+                            // test record_field_pat
+                            // fn foo() {
+                            //     let S { 0: 1 } = ();
+                            //     let S { x: 1 } = ();
+                            // }
+                            IDENT | INT_NUMBER if p.nth(1) == T![:] => {
+                                name_ref_or_index(p);
+                                p.bump(T![:]);
+                                pattern(p);
+                            }
+                            T![box] => {
+                                // FIXME: not all box patterns should be allowed
+                                box_pat(p);
+                            }
+                            _ => {
+                                bind_pat(p, false);
+                            }
+                        }
+                    });
                 }
-                m.complete_sealed(p, RECORD_FIELD_PAT);
+            }
+            if !p.at(T!['}']) {
+                p.expect(T![,]);
             }
         }
-        if !p.at(T!['}']) {
-            p.expect(T![,]);
-        }
-    }
-    p.expect(T!['}']);
-    m.complete_sealed(p, RECORD_FIELD_PAT_LIST);
+        p.expect(T!['}']);
+    });
 }
 
 // test placeholder_pat

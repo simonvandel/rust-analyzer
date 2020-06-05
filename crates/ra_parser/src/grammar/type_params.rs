@@ -12,32 +12,32 @@ pub(super) fn opt_type_param_list(p: &mut Parser) {
 
 fn type_param_list(p: &mut Parser) {
     assert!(p.at(T![<]));
-    let m = p.start();
-    p.bump(T![<]);
+    p.with_sealed(TYPE_PARAM_LIST, |p| {
+        p.bump(T![<]);
 
-    while !p.at(EOF) && !p.at(T![>]) {
-        let m = p.start();
+        while !p.at(EOF) && !p.at(T![>]) {
+            let m = p.start_precedable();
 
-        // test generic_lifetime_type_attribute
-        // fn foo<#[derive(Lifetime)] 'a, #[derive(Type)] T>(_: &'a T) {
-        // }
-        attributes::outer_attributes(p);
+            // test generic_lifetime_type_attribute
+            // fn foo<#[derive(Lifetime)] 'a, #[derive(Type)] T>(_: &'a T) {
+            // }
+            attributes::outer_attributes(p);
 
-        match p.current() {
-            LIFETIME => lifetime_param(p, m),
-            IDENT => type_param(p, m),
-            CONST_KW => type_const_param(p, m),
-            _ => {
-                m.abandon(p);
-                p.err_and_bump("expected type parameter")
+            match p.current() {
+                LIFETIME => lifetime_param(p, m.into()),
+                IDENT => type_param(p, m.into()),
+                CONST_KW => type_const_param(p, m.into()),
+                _ => {
+                    m.abandon(p);
+                    p.err_and_bump("expected type parameter")
+                }
+            }
+            if !p.at(T![>]) && !p.expect(T![,]) {
+                break;
             }
         }
-        if !p.at(T![>]) && !p.expect(T![,]) {
-            break;
-        }
-    }
-    p.expect(T![>]);
-    m.complete_sealed(p, TYPE_PARAM_LIST);
+        p.expect(T![>]);
+    });
 }
 
 fn lifetime_param(p: &mut Parser, m: Marker<Sealed>) {
@@ -108,12 +108,11 @@ pub(super) fn bounds_without_colon_m(
 
 pub(super) fn bounds_without_colon(p: &mut Parser) {
     let m = p.start_precedable();
-    let pm = bounds_without_colon_m(p, m);
-    p.seal(pm);
+    bounds_without_colon_m(p, m);
 }
 
 fn type_bound(p: &mut Parser) -> bool {
-    let m = p.start();
+    let m = p.start_precedable();
     let has_paren = p.eat(T!['(']);
     p.eat(T![?]);
     match p.current() {
@@ -145,24 +144,23 @@ pub(super) fn opt_where_clause(p: &mut Parser) {
     if !p.at(T![where]) {
         return;
     }
-    let m = p.start();
-    p.bump(T![where]);
+    p.with_sealed(WHERE_CLAUSE, |p| {
+        p.bump(T![where]);
 
-    while is_where_predicate(p) {
-        where_predicate(p);
+        while is_where_predicate(p) {
+            where_predicate(p);
 
-        let comma = p.eat(T![,]);
+            let comma = p.eat(T![,]);
 
-        if is_where_clause_end(p) {
-            break;
+            if is_where_clause_end(p) {
+                break;
+            }
+
+            if !comma {
+                p.error("expected comma");
+            }
         }
-
-        if !comma {
-            p.error("expected comma");
-        }
-    }
-
-    m.complete_sealed(p, WHERE_CLAUSE);
+    });
 }
 
 fn is_where_predicate(p: &mut Parser) -> bool {
@@ -181,33 +179,33 @@ fn is_where_clause_end(p: &mut Parser) -> bool {
 }
 
 fn where_predicate(p: &mut Parser) {
-    let m = p.start();
-    match p.current() {
-        LIFETIME => {
-            p.bump(LIFETIME);
-            if p.at(T![:]) {
-                bounds(p);
-            } else {
-                p.error("expected colon");
+    p.with_sealed(WHERE_PRED, |p| {
+        match p.current() {
+            LIFETIME => {
+                p.bump(LIFETIME);
+                if p.at(T![:]) {
+                    bounds(p);
+                } else {
+                    p.error("expected colon");
+                }
             }
-        }
-        T![impl] => {
-            p.error("expected lifetime or type");
-        }
-        _ => {
-            // test where_pred_for
-            // fn test<F>()
-            // where
-            //    for<'a> F: Fn(&'a str)
-            // { }
-            types::type_(p);
+            T![impl] => {
+                p.error("expected lifetime or type");
+            }
+            _ => {
+                // test where_pred_for
+                // fn test<F>()
+                // where
+                //    for<'a> F: Fn(&'a str)
+                // { }
+                types::type_(p);
 
-            if p.at(T![:]) {
-                bounds(p);
-            } else {
-                p.error("expected colon");
+                if p.at(T![:]) {
+                    bounds(p);
+                } else {
+                    p.error("expected colon");
+                }
             }
         }
-    }
-    m.complete_sealed(p, WHERE_PRED);
+    });
 }

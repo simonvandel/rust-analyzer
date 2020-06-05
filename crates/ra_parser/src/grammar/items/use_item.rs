@@ -15,7 +15,7 @@ pub(super) fn use_item(p: &mut Parser, m: Marker<Sealed>) {
 /// so handles both `some::path::{inner::path}` and `inner::path` in
 /// `use some::path::{inner::path};`
 fn use_tree(p: &mut Parser, top_level: bool) {
-    let m = p.start();
+    let m = p.start_precedable();
     match p.current() {
         // Finish the use_tree for cases of e.g.
         // `use some::path::{self, *};` or `use *;`
@@ -119,14 +119,14 @@ fn use_tree(p: &mut Parser, top_level: bool) {
 
 pub(crate) fn use_tree_list(p: &mut Parser) {
     assert!(p.at(T!['{']));
-    let m = p.start();
-    p.bump(T!['{']);
-    while !p.at(EOF) && !p.at(T!['}']) {
-        use_tree(p, false);
-        if !p.at(T!['}']) {
-            p.expect(T![,]);
+    p.with_sealed(USE_TREE_LIST, |p| {
+        p.bump(T!['{']);
+        while !p.at(EOF) && !p.at(T!['}']) {
+            use_tree(p, false);
+            if !p.at(T!['}']) {
+                p.expect(T![,]);
+            }
         }
-    }
-    p.expect(T!['}']);
-    m.complete_sealed(p, USE_TREE_LIST);
+        p.expect(T!['}']);
+    });
 }

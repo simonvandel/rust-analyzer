@@ -21,7 +21,7 @@ pub(super) fn expr(p: &mut Parser) -> (Option<PrecedableMarker>, BlockLike) {
 }
 
 pub(super) fn expr_with_attrs(p: &mut Parser) -> bool {
-    let m = p.start();
+    let m = p.start_precedable();
     let has_attrs = p.at(T![#]);
     attributes::outer_attributes(p);
 
@@ -58,7 +58,7 @@ fn is_expr_stmt_attr_allowed(kind: SyntaxKind) -> bool {
 }
 
 pub(super) fn stmt(p: &mut Parser, with_semi: StmtWithSemi) {
-    let m = p.start();
+    let m = p.start_precedable();
     // test attr_on_expr_stmt
     // fn foo() {
     //     #[A] foo();
@@ -70,7 +70,7 @@ pub(super) fn stmt(p: &mut Parser, with_semi: StmtWithSemi) {
     attributes::outer_attributes(p);
 
     if p.at(T![let]) {
-        let_stmt(p, m, with_semi);
+        let_stmt(p, m.into(), with_semi);
         return;
     }
 
@@ -609,47 +609,47 @@ fn path_expr(p: &mut Parser, r: Restrictions) -> (PrecedableMarker, BlockLike) {
 // }
 pub(crate) fn record_field_list(p: &mut Parser) {
     assert!(p.at(T!['{']));
-    let m = p.start();
-    p.bump(T!['{']);
-    while !p.at(EOF) && !p.at(T!['}']) {
-        let m = p.start();
-        // test record_literal_field_with_attr
-        // fn main() {
-        //     S { #[cfg(test)] field: 1 }
-        // }
-        attributes::outer_attributes(p);
+    p.with_sealed(RECORD_FIELD_LIST, |p| {
+        p.bump(T!['{']);
+        while !p.at(EOF) && !p.at(T!['}']) {
+            let m = p.start_precedable();
+            // test record_literal_field_with_attr
+            // fn main() {
+            //     S { #[cfg(test)] field: 1 }
+            // }
+            attributes::outer_attributes(p);
 
-        match p.current() {
-            IDENT | INT_NUMBER => {
-                // test_err record_literal_before_ellipsis_recovery
-                // fn main() {
-                //     S { field ..S::default() }
-                // }
-                if p.nth_at(1, T![:]) || p.nth_at(1, T![..]) {
-                    name_ref_or_index(p);
-                    p.expect(T![:]);
+            match p.current() {
+                IDENT | INT_NUMBER => {
+                    // test_err record_literal_before_ellipsis_recovery
+                    // fn main() {
+                    //     S { field ..S::default() }
+                    // }
+                    if p.nth_at(1, T![:]) || p.nth_at(1, T![..]) {
+                        name_ref_or_index(p);
+                        p.expect(T![:]);
+                    }
+                    expr(p);
+                    m.complete_sealed(p, RECORD_FIELD);
                 }
-                expr(p);
-                m.complete_sealed(p, RECORD_FIELD);
+                T![.] if p.at(T![..]) => {
+                    m.abandon(p);
+                    p.bump(T![..]);
+                    expr(p);
+                }
+                T!['{'] => {
+                    error_block(p, "expected a field");
+                    m.abandon(p);
+                }
+                _ => {
+                    p.err_and_bump("expected identifier");
+                    m.abandon(p);
+                }
             }
-            T![.] if p.at(T![..]) => {
-                m.abandon(p);
-                p.bump(T![..]);
-                expr(p);
-            }
-            T!['{'] => {
-                error_block(p, "expected a field");
-                m.abandon(p);
-            }
-            _ => {
-                p.err_and_bump("expected identifier");
-                m.abandon(p);
+            if !p.at(T!['}']) {
+                p.expect(T![,]);
             }
         }
-        if !p.at(T!['}']) {
-            p.expect(T![,]);
-        }
-    }
-    p.expect(T!['}']);
-    m.complete_sealed(p, RECORD_FIELD_LIST);
+        p.expect(T!['}']);
+    });
 }

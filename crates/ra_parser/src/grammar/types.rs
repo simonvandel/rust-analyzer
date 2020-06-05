@@ -91,33 +91,33 @@ fn paren_or_tuple_type(p: &mut Parser) {
 // type Never = !;
 fn never_type(p: &mut Parser) {
     assert!(p.at(T![!]));
-    let m = p.start();
-    p.bump(T![!]);
-    m.complete_sealed(p, NEVER_TYPE);
+    p.with_sealed(NEVER_TYPE, |p| {
+        p.bump(T![!]);
+    });
 }
 
 fn pointer_type(p: &mut Parser) {
     assert!(p.at(T![*]));
-    let m = p.start();
-    p.bump(T![*]);
+    p.with_sealed(POINTER_TYPE, |p| {
+        p.bump(T![*]);
 
-    match p.current() {
-        // test pointer_type_mut
-        // type M = *mut ();
-        // type C = *mut ();
-        T![mut] | T![const] => p.bump_any(),
-        _ => {
-            // test_err pointer_type_no_mutability
-            // type T = *();
-            p.error(
-                "expected mut or const in raw pointer type \
+        match p.current() {
+            // test pointer_type_mut
+            // type M = *mut ();
+            // type C = *mut ();
+            T![mut] | T![const] => p.bump_any(),
+            _ => {
+                // test_err pointer_type_no_mutability
+                // type T = *();
+                p.error(
+                    "expected mut or const in raw pointer type \
                  (use `*mut T` or `*const T` as appropriate)",
-            );
-        }
-    };
+                );
+            }
+        };
 
-    type_no_bounds(p);
-    m.complete_sealed(p, POINTER_TYPE);
+        type_no_bounds(p);
+    });
 }
 
 fn array_or_slice_type(p: &mut Parser) {
@@ -158,21 +158,21 @@ fn array_or_slice_type(p: &mut Parser) {
 // type C = &mut ();
 fn reference_type(p: &mut Parser) {
     assert!(p.at(T![&]));
-    let m = p.start();
-    p.bump(T![&]);
-    p.eat(LIFETIME);
-    p.eat(T![mut]);
-    type_no_bounds(p);
-    m.complete_sealed(p, REFERENCE_TYPE);
+    p.with_sealed(REFERENCE_TYPE, |p| {
+        p.bump(T![&]);
+        p.eat(LIFETIME);
+        p.eat(T![mut]);
+        type_no_bounds(p);
+    });
 }
 
 // test placeholder_type
 // type Placeholder = _;
 fn placeholder_type(p: &mut Parser) {
     assert!(p.at(T![_]));
-    let m = p.start();
-    p.bump(T![_]);
-    m.complete_sealed(p, PLACEHOLDER_TYPE);
+    p.with_sealed(PLACEHOLDER_TYPE, |p| {
+        p.bump(T![_]);
+    });
 }
 
 // test fn_pointer_type
@@ -181,7 +181,7 @@ fn placeholder_type(p: &mut Parser) {
 // type C = unsafe extern "C" fn();
 // type D = extern "C" fn ( u8 , ... ) -> u8;
 fn fn_pointer_type(p: &mut Parser) {
-    let m = p.start();
+    let m = p.start_precedable();
     p.eat(T![unsafe]);
     if p.at(T![extern]) {
         abi(p);
@@ -221,35 +221,35 @@ pub(super) fn for_binder(p: &mut Parser) {
 // fn baz<T>(_t: &T) where for<'a> <&'a T as Baz>::Foo: Iterator {}
 pub(super) fn for_type(p: &mut Parser) {
     assert!(p.at(T![for]));
-    let m = p.start();
-    for_binder(p);
-    match p.current() {
-        T![fn] | T![unsafe] | T![extern] => fn_pointer_type(p),
-        T![&] => reference_type(p),
-        _ if paths::is_path_start(p) => path_type_(p, false),
-        _ => p.error("expected a path"),
-    }
-    m.complete_sealed(p, FOR_TYPE);
+    p.with_sealed(FOR_TYPE, |p| {
+        for_binder(p);
+        match p.current() {
+            T![fn] | T![unsafe] | T![extern] => fn_pointer_type(p),
+            T![&] => reference_type(p),
+            _ if paths::is_path_start(p) => path_type_(p, false),
+            _ => p.error("expected a path"),
+        }
+    });
 }
 
 // test impl_trait_type
 // type A = impl Iterator<Item=Foo<'a>> + 'a;
 fn impl_trait_type(p: &mut Parser) {
     assert!(p.at(T![impl]));
-    let m = p.start();
-    p.bump(T![impl]);
-    type_params::bounds_without_colon(p);
-    m.complete_sealed(p, IMPL_TRAIT_TYPE);
+    p.with_sealed(IMPL_TRAIT_TYPE, |p| {
+        p.bump(T![impl]);
+        type_params::bounds_without_colon(p);
+    });
 }
 
 // test dyn_trait_type
 // type A = dyn Iterator<Item=Foo<'a>> + 'a;
 fn dyn_trait_type(p: &mut Parser) {
     assert!(p.at(T![dyn]));
-    let m = p.start();
-    p.bump(T![dyn]);
-    type_params::bounds_without_colon(p);
-    m.complete_sealed(p, DYN_TRAIT_TYPE);
+    p.with_sealed(DYN_TRAIT_TYPE, |p| {
+        p.bump(T![dyn]);
+        type_params::bounds_without_colon(p);
+    });
 }
 
 // test path_type
@@ -295,7 +295,6 @@ pub(super) fn path_type_(p: &mut Parser, allow_bounds: bool) {
     if allow_bounds {
         opt_path_type_bounds_as_dyn_trait_type(p, path);
     } else {
-        p.seal(path);
     }
 }
 

@@ -271,8 +271,7 @@ fn if_expr(p: &mut Parser) -> PrecedableMarker {
     if p.at(T![else]) {
         p.bump(T![else]);
         if p.at(T![if]) {
-            let m = if_expr(p);
-            p.seal(m);
+            if_expr(p);
         } else {
             block_expr(p);
         }
@@ -288,10 +287,10 @@ fn if_expr(p: &mut Parser) -> PrecedableMarker {
 // }
 fn label(p: &mut Parser) {
     assert!(p.at(LIFETIME) && p.nth(1) == T![:]);
-    let m = p.start();
-    p.bump(LIFETIME);
-    p.bump_any();
-    m.complete_sealed(p, LABEL);
+    p.with_sealed(LABEL, |p| {
+        p.bump(LIFETIME);
+        p.bump_any();
+    });
 }
 
 // test loop_expr
@@ -345,13 +344,13 @@ fn for_expr(p: &mut Parser, m: Option<Marker<Precedable>>) -> PrecedableMarker {
 //     while let | Some(_) = None {}
 // }
 fn cond(p: &mut Parser) {
-    let m = p.start();
-    if p.eat(T![let]) {
-        patterns::pattern_top(p);
-        p.expect(T![=]);
-    }
-    expr_no_struct(p);
-    m.complete_sealed(p, CONDITION);
+    p.with_sealed(CONDITION, |p| {
+        if p.eat(T![let]) {
+            patterns::pattern_top(p);
+            p.expect(T![=]);
+        }
+        expr_no_struct(p);
+    });
 }
 
 // test match_expr
@@ -425,30 +424,30 @@ pub(crate) fn match_arm_list(p: &mut Parser) {
 //     };
 // }
 fn match_arm(p: &mut Parser) -> BlockLike {
-    let m = p.start();
-    // test match_arms_outer_attributes
-    // fn foo() {
-    //     match () {
-    //         #[cfg(feature = "some")]
-    //         _ => (),
-    //         #[cfg(feature = "other")]
-    //         _ => (),
-    //         #[cfg(feature = "many")]
-    //         #[cfg(feature = "attributes")]
-    //         #[cfg(feature = "before")]
-    //         _ => (),
-    //     }
-    // }
-    attributes::outer_attributes(p);
+    p.with_sealed(MATCH_ARM, |p| {
+        // test match_arms_outer_attributes
+        // fn foo() {
+        //     match () {
+        //         #[cfg(feature = "some")]
+        //         _ => (),
+        //         #[cfg(feature = "other")]
+        //         _ => (),
+        //         #[cfg(feature = "many")]
+        //         #[cfg(feature = "attributes")]
+        //         #[cfg(feature = "before")]
+        //         _ => (),
+        //     }
+        // }
+        attributes::outer_attributes(p);
 
-    patterns::pattern_top_r(p, TokenSet::EMPTY);
-    if p.at(T![if]) {
-        match_guard(p);
-    }
-    p.expect(T![=>]);
-    let blocklike = expr_stmt(p).1;
-    m.complete_sealed(p, MATCH_ARM);
-    blocklike
+        patterns::pattern_top_r(p, TokenSet::EMPTY);
+        if p.at(T![if]) {
+            match_guard(p);
+        }
+        p.expect(T![=>]);
+        let blocklike = expr_stmt(p).1;
+        blocklike
+    })
 }
 
 // test match_guard
@@ -459,10 +458,10 @@ fn match_arm(p: &mut Parser) -> BlockLike {
 // }
 fn match_guard(p: &mut Parser) {
     assert!(p.at(T![if]));
-    let m = p.start();
-    p.bump(T![if]);
-    expr(p);
-    m.complete_sealed(p, MATCH_GUARD);
+    p.with_sealed(MATCH_GUARD, |p| {
+        p.bump(T![if]);
+        expr(p);
+    });
 }
 
 // test block
@@ -475,8 +474,7 @@ pub(crate) fn block_expr(p: &mut Parser) {
         p.error("expected a block");
         return;
     }
-    let m = block_expr_unchecked(p);
-    p.seal(m);
+    block_expr_unchecked(p);
 }
 
 fn block_expr_unchecked(p: &mut Parser) -> PrecedableMarker {

@@ -40,17 +40,17 @@ pub(super) fn trait_def(p: &mut Parser) {
 // }
 pub(crate) fn trait_item_list(p: &mut Parser) {
     assert!(p.at(T!['{']));
-    let m = p.start();
-    p.bump(T!['{']);
-    while !p.at(EOF) && !p.at(T!['}']) {
-        if p.at(T!['{']) {
-            error_block(p, "expected an item");
-            continue;
+    p.with_sealed(ITEM_LIST, |p| {
+        p.bump(T!['{']);
+        while !p.at(EOF) && !p.at(T!['}']) {
+            if p.at(T!['{']) {
+                error_block(p, "expected an item");
+                continue;
+            }
+            item_or_macro(p, true, ItemFlavor::Trait);
         }
-        item_or_macro(p, true, ItemFlavor::Trait);
-    }
-    p.expect(T!['}']);
-    m.complete_sealed(p, ITEM_LIST);
+        p.expect(T!['}']);
+    });
 }
 
 // test impl_def

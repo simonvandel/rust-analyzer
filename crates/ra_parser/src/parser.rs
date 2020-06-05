@@ -176,42 +176,22 @@ impl<'t> Parser<'t> {
     /// consumed between the `start` and the corresponding `Marker::complete`
     /// belong to the same node.
     pub(crate) fn start(&mut self) -> Marker<Sealed> {
-        // TODO start should be discontinued, but for now be conservative and do not be eager
+        let pos = self.events.len() as u32;
+        self.push_event_no_drain(Event::tombstone());
 
-        let m = self.start_internal();
-        self.set_buffered(&m);
-        m.into()
+        Marker::<Sealed>::new(pos, self)
     }
 
     /// Starts a new node in the syntax tree. All nodes and tokens
     /// consumed between the `start` and the corresponding `Marker::complete`
     /// belong to the same node.
     pub(crate) fn start_precedable(&mut self) -> Marker<Precedable> {
-        // TODO start should be discontinued, but for now be conservative and do not be eager
-
-        let m = self.start_internal();
-        self.set_buffered(&m);
-        m
-    }
-
-    pub(crate) fn start_not_precedable(&mut self) -> Marker<Sealed> {
-        eprintln!("start_not_precedable called ");
-        let mut m = self.start_internal();
-        // TODO can this be made with typestate?
-        m.set_only_completable();
-        m.into()
-    }
-
-    /// Starts a new node in the syntax tree. All nodes and tokens
-    /// consumed between the `start` and the corresponding `Marker::complete`
-    /// belong to the same node.
-    fn start_internal(&mut self) -> Marker<Precedable> {
-        eprintln!("start_internal called");
-
         let pos = self.events.len() as u32;
+        let m = Marker::<Precedable>::new(pos, self);
+        // it is important that the marker is constructed before the push_event, as otherwise the event would be drained immediately. We can't drain if it is possible to precede.
+        self.push_event_no_drain(Event::tombstone());
 
-        self.push_event(Event::tombstone());
-        Marker::<Precedable>::new(pos, self)
+        m
     }
 
     pub(crate) fn with_precedable_marker<F>(&mut self, f: F) -> PrecedableMarker
@@ -220,37 +200,41 @@ impl<'t> Parser<'t> {
     {
         eprintln!("with_precedable_marker called");
 
-        let m = self.start_internal();
-        self.set_buffered(&m);
+        let m = self.start_precedable();
         f(self, m)
     }
 
-    pub(crate) fn with_sealed<F>(&mut self, kind: SyntaxKind, f: F)
+    pub(crate) fn with_sealed<F, R>(&mut self, kind: SyntaxKind, f: F) -> R
     where
-        F: FnOnce(&mut Parser),
+        F: FnOnce(&mut Parser) -> R,
     {
         eprintln!(
             "with_sealed called (len of buffering_idx: {} )",
             self.buffering_start_index.len()
         );
-        // TODO: Sealed behøver vel ikke pos?
-        let mut m = Marker::<Sealed>::new(self.events.len() as u32, self);
+
+        let mut m = self.start();
+
         // set the kind since we know it - this makes it possible to eagerly drain the events
 
-        let event = Event::Start { kind: kind, forward_parent: None };
-        self.push_event(event);
+        let idx = m.pos as usize;
+        match self.events[idx] {
+            Event::Start { kind: ref mut slot, .. } => {
+                *slot = kind;
+            }
+            _ => unreachable!(),
+        }
+
         m.start_event_is_buffered = !self.buffering_start_index.is_empty();
         m.defuse();
 
         // with_sealed guarantees that it is not possible to precede the marker, so we don't have to handle forward parents
         // This also means that we can eagerly drain the events through the sink
-
-        f(self);
+        self.pop_buffering_index();
+        let ret = f(self);
 
         self.push_event(Event::Finish);
-        if self.buffering_start_index.is_empty() {
-            // self.drain_events(start_pos);
-        }
+        ret
     }
 
     fn drain_events(&mut self, start_pos: u32) {
@@ -379,7 +363,7 @@ impl<'t> Parser<'t> {
             return;
         }
 
-        let m = self.start_internal();
+        let m = self.start();
         self.error(message);
         self.bump_any();
         m.complete_sealed(self, ERROR);
@@ -389,21 +373,9 @@ impl<'t> Parser<'t> {
         dbg!(self.buffering_start_index.pop().unwrap())
     }
 
-    /// Mark the PrecedableMarker as sealed, so it cannot be preceded
-    pub(crate) fn seal(&mut self, mut m: PrecedableMarker) {
-        eprintln!("seal called");
-        // let idx_to_drain_from = self.pop_buffering_index();
-
-        // // the current marker is now sealed - if nothing is currently in buffereing mode, we can drain the events
-        // if self.buffering_start_index.is_empty() {
-        //     debug_assert!(!self.events.is_empty());
-        //     self.drain_events(idx_to_drain_from)
-        // }
-    }
-
     pub(crate) fn seal_current(&mut self) {
         eprintln!("seal_current called");
-        let idx_to_drain_from = self.pop_buffering_index();
+        self.pop_buffering_index();
 
         // // the current marker is now sealed - if nothing is currently in buffereing mode, we can drain the events
         // if self.buffering_start_index.is_empty() {
@@ -420,19 +392,29 @@ impl<'t> Parser<'t> {
         self.push_event(Event::Token { kind, n_raw_tokens });
     }
 
+    fn push_event_no_drain(&mut self, event: Event) {
+        eprintln!("push_event_no_drain called {:?}", event);
+
+        self.events.push(event)
+    }
+
     fn push_event(&mut self, event: Event) {
         eprintln!("push_event called {:?}", event);
         if self.buffering_start_index.is_empty() {
             self.events.push(event);
-            self.drain_events(self.events.len() as u32)
+            // drain this event
+            // self.drain_events(self.events.len() as u32 - 1)
+            // self.drain_events(self.events.len() as u32)
+
+            self.drain_events(0)
         } else {
             self.events.push(event)
         }
     }
 
-    pub(crate) fn set_buffered<T: MarkerType>(&mut self, m: &Marker<T>) {
-        eprintln!("set_buffered {}", m.pos);
-        self.buffering_start_index.push(m.pos);
+    pub(crate) fn set_buffered(&mut self, pos: u32) {
+        eprintln!("set_buffered {}", pos);
+        self.buffering_start_index.push(pos);
     }
 }
 
@@ -460,40 +442,26 @@ where
     only_completable: bool,
     t: PhantomData<T>,
     start_event_is_buffered: bool,
+    must_pop_stack_on_drop: bool,
     parser_ptr: usize,
 }
 
 impl<T: MarkerType> Drop for Marker<T> {
     fn drop(&mut self) {
-        let p_ptr = self.parser_ptr as *mut Parser;
-        unsafe {
-            // TODO svs: det virker ikke hvis dette kode er inde. Illegal instruction - måske aliasing
-            let p = &mut (*p_ptr);
-            // we only want to pop the stack if this marker was created buffered
-            if p.buffering_start_index.last().map_or(false, |x| *x == self.pos) {
-                p.seal_current()
+        if self.must_pop_stack_on_drop {
+            let p_ptr = self.parser_ptr as *mut Parser;
+            unsafe {
+                let p = &mut (*p_ptr);
+                // we only want to pop the stack if this marker was created buffered
+                if p.buffering_start_index.last().map_or(false, |x| *x == self.pos) {
+                    p.seal_current()
+                }
             }
         }
     }
 }
 
 impl<T: MarkerType> Marker<T> {
-    fn new(pos: u32, p: &mut Parser) -> Marker<T> {
-        let ptr = p as *mut _ as usize;
-        Marker {
-            pos,
-            bomb: DropBomb::new("Marker must be either completed or abandoned"),
-            only_completable: true,
-            t: Default::default(),
-            start_event_is_buffered: true,
-            parser_ptr: ptr,
-        }
-    }
-
-    pub(crate) fn set_only_completable(&mut self) {
-        self.only_completable = false;
-    }
-
     pub(crate) fn defuse(&mut self) {
         self.bomb.defuse();
     }
@@ -515,40 +483,45 @@ impl<T: MarkerType> Marker<T> {
         }
 
         p.push_event(Event::Finish);
-
-        // since the marker is sealed, we know that precede will not be called on this marker
-        // so we can drain all events from the start of this marker to the event
-        // if p.buffering_start_index.is_empty() {
-        //     debug_assert!(!p.events.is_empty());
-        //     p.drain_events(self.pos);
-        // }
     }
 
     // TODO: lige nu er precedable unbounded. Hvordan kan man markere at den er død?
     // TODO: idé: on drop, use unsafe ptr to get parser
-
-    /// Abandons the syntax tree node. All its children
-    /// are attached to its parent instead.
-    pub(crate) fn abandon(mut self, p: &mut Parser) {
-        if !self.only_completable {
-            panic!("You cannot abondon this marker");
-        }
-        self.bomb.defuse();
-        let idx = self.pos as usize;
-        if idx == p.events.len() - 1 {
-            match p.events.pop() {
-                Some(Event::Start { kind: TOMBSTONE, forward_parent: None }) => (),
-                _ => unreachable!(),
-            }
-        }
-        // p.drain_events(self.pos);
-    }
 }
 
 // TODO ved new af Marker<Sealed>, så ikke push til buffering stack, ikke kør drop af pop buffering steack
-// TODO ved new af Marker<Precedable>, så push til buffering stack, kør drop af pop buffering steack
+impl Marker<Sealed> {
+    fn new(pos: u32, p: &mut Parser) -> Marker<Sealed> {
+        let ret = Marker {
+            pos,
+            bomb: DropBomb::new("Marker must be either completed or abandoned"),
+            only_completable: true,
+            t: Default::default(),
+            start_event_is_buffered: true,
+            must_pop_stack_on_drop: false,
+            parser_ptr: 0,
+        };
+        p.set_buffered(ret.pos);
+        ret
+    }
+}
 
+// TODO ved new af Marker<Precedable>, så push til buffering stack, kør drop af pop buffering steack
 impl Marker<Precedable> {
+    fn new(pos: u32, p: &mut Parser) -> Marker<Precedable> {
+        let ret = Marker {
+            pos,
+            bomb: DropBomb::new("Marker must be either completed or abandoned"),
+            only_completable: true,
+            t: Default::default(),
+            start_event_is_buffered: true,
+            must_pop_stack_on_drop: true,
+            parser_ptr: p as *mut _ as usize,
+        };
+        p.set_buffered(ret.pos);
+        ret
+    }
+
     /// Finishes the syntax tree node and assigns `kind` to it,
     /// and mark the create a `CompletedMarker` for possible future
     /// operation like `.precede()` to deal with forward_parent.
@@ -572,9 +545,25 @@ impl Marker<Precedable> {
         p.push_event(Event::Finish);
         PrecedableMarker::new(self.pos, finish_pos, kind, p)
     }
+
+    /// Abandons the syntax tree node. All its children
+    /// are attached to its parent instead.
+    pub(crate) fn abandon(mut self, p: &mut Parser) {
+        if !self.only_completable {
+            panic!("You cannot abondon this marker");
+        }
+        self.bomb.defuse();
+        let idx = self.pos as usize;
+        if idx == p.events.len() - 1 {
+            match p.events.pop() {
+                Some(Event::Start { kind: TOMBSTONE, forward_parent: None }) => (),
+                _ => unreachable!(),
+            }
+        }
+        // p.drain_events(self.pos);
+    }
 }
 
-#[must_use = "parser.seal() has to be called"]
 pub(crate) struct PrecedableMarker {
     start_pos: u32,
     finish_pos: u32,
@@ -594,6 +583,7 @@ impl Drop for PrecedableMarker {
 
 impl PrecedableMarker {
     fn new(start_pos: u32, finish_pos: u32, kind: SyntaxKind, p: &mut Parser) -> Self {
+        p.set_buffered(start_pos);
         let ptr = p as *mut _ as usize;
         PrecedableMarker { start_pos, finish_pos, kind, parser_ptr: ptr }
     }
@@ -631,11 +621,10 @@ impl PrecedableMarker {
     /// Append a new `START` events as `[START, FINISH, NEWSTART]`,
     /// then mark `NEWSTART` as `START`'s parent with saving its relative
     /// distance to `NEWSTART` into forward_parent(=2 in this case);
-    pub(crate) fn precede(mut self, p: &mut Parser) -> Marker<Precedable> {
+    pub(crate) fn precede(self, p: &mut Parser) -> Marker<Precedable> {
         // TODO: precede design: can it be simpler? the forward_parent should be removed in favor of prepending the new parent event in the current list of events
 
-        let new_pos = p.start_internal();
-        p.set_buffered(&new_pos);
+        let new_pos = p.start_precedable();
         let idx = self.start_pos as usize;
         match p.events[idx] {
             Event::Start { ref mut forward_parent, .. } => {
@@ -647,7 +636,7 @@ impl PrecedableMarker {
     }
 
     /// Undo this completion and turns into a `Marker`
-    pub(crate) fn undo_completion(mut self, p: &mut Parser) -> Marker<Sealed> {
+    pub(crate) fn undo_completion(self, p: &mut Parser) -> Marker<Precedable> {
         let start_idx = self.start_pos as usize;
         let finish_idx = self.finish_pos as usize;
         match p.events[start_idx] {
@@ -658,7 +647,7 @@ impl PrecedableMarker {
             ref mut slot @ Event::Finish => *slot = Event::tombstone(),
             _ => unreachable!(),
         }
-        Marker::<Sealed>::new(self.start_pos, p)
+        Marker::<Precedable>::new(self.start_pos, p)
     }
 
     pub(crate) fn kind(&self) -> SyntaxKind {

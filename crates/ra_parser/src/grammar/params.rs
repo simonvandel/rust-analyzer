@@ -41,36 +41,36 @@ fn list_(p: &mut Parser, flavor: Flavor) {
         FnDef | FnTrait | FnPointer => (T!['('], T![')']),
     };
 
-    let m = p.start();
-    p.bump(bra);
+    p.with_sealed(PARAM_LIST, |p| {
+        p.bump(bra);
 
-    if let FnDef = flavor {
-        // test self_param_outer_attr
-        // fn f(#[must_use] self) {}
-        attributes::outer_attributes(p);
-        opt_self_param(p);
-    }
-
-    while !p.at(EOF) && !p.at(ket) {
-        // test param_outer_arg
-        // fn f(#[attr1] pat: Type) {}
-        attributes::outer_attributes(p);
-
-        if !p.at_ts(VALUE_PARAMETER_FIRST) {
-            p.error("expected value parameter");
-            break;
+        if let FnDef = flavor {
+            // test self_param_outer_attr
+            // fn f(#[must_use] self) {}
+            attributes::outer_attributes(p);
+            opt_self_param(p);
         }
-        let param = value_parameter(p, flavor);
-        if !p.at(ket) {
-            p.expect(T![,]);
-        }
-        if let Variadic(true) = param {
-            break;
-        }
-    }
 
-    p.expect(ket);
-    m.complete_sealed(p, PARAM_LIST);
+        while !p.at(EOF) && !p.at(ket) {
+            // test param_outer_arg
+            // fn f(#[attr1] pat: Type) {}
+            attributes::outer_attributes(p);
+
+            if !p.at_ts(VALUE_PARAMETER_FIRST) {
+                p.error("expected value parameter");
+                break;
+            }
+            let param = value_parameter(p, flavor);
+            if !p.at(ket) {
+                p.expect(T![,]);
+            }
+            if let Variadic(true) = param {
+                break;
+            }
+        }
+
+        p.expect(ket);
+    });
 }
 
 const VALUE_PARAMETER_FIRST: TokenSet = patterns::PATTERN_FIRST.union(types::TYPE_FIRST);
@@ -79,57 +79,57 @@ struct Variadic(bool);
 
 fn value_parameter(p: &mut Parser, flavor: Flavor) -> Variadic {
     let mut res = Variadic(false);
-    let m = p.start();
-    match flavor {
-        // test param_list_vararg
-        // extern "C" { fn printf(format: *const i8, ...) -> i32; }
-        Flavor::FnDef | Flavor::FnPointer if p.eat(T![...]) => res = Variadic(true),
+    p.with_sealed(PARAM, |p| {
+        match flavor {
+            // test param_list_vararg
+            // extern "C" { fn printf(format: *const i8, ...) -> i32; }
+            Flavor::FnDef | Flavor::FnPointer if p.eat(T![...]) => res = Variadic(true),
 
-        // test fn_def_param
-        // fn foo((x, y): (i32, i32)) {}
-        Flavor::FnDef => {
-            patterns::pattern(p);
-            if variadic_param(p) {
-                res = Variadic(true)
-            } else {
-                types::ascription(p);
-            }
-        }
-        // test value_parameters_no_patterns
-        // type F = Box<Fn(i32, &i32, &i32, ())>;
-        Flavor::FnTrait => {
-            types::type_(p);
-        }
-        // test fn_pointer_param_ident_path
-        // type Foo = fn(Bar::Baz);
-        // type Qux = fn(baz: Bar::Baz);
-
-        // test fn_pointer_unnamed_arg
-        // type Foo = fn(_: bar);
-        Flavor::FnPointer => {
-            if (p.at(IDENT) || p.at(UNDERSCORE)) && p.nth(1) == T![:] && !p.nth_at(1, T![::]) {
-                patterns::pattern_single(p);
+            // test fn_def_param
+            // fn foo((x, y): (i32, i32)) {}
+            Flavor::FnDef => {
+                patterns::pattern(p);
                 if variadic_param(p) {
                     res = Variadic(true)
                 } else {
                     types::ascription(p);
                 }
-            } else {
+            }
+            // test value_parameters_no_patterns
+            // type F = Box<Fn(i32, &i32, &i32, ())>;
+            Flavor::FnTrait => {
                 types::type_(p);
             }
-        }
-        // test closure_params
-        // fn main() {
-        //    let foo = |bar, baz: Baz, qux: Qux::Quux| ();
-        // }
-        Flavor::Closure => {
-            patterns::pattern_single(p);
-            if p.at(T![:]) && !p.at(T![::]) {
-                types::ascription(p);
+            // test fn_pointer_param_ident_path
+            // type Foo = fn(Bar::Baz);
+            // type Qux = fn(baz: Bar::Baz);
+
+            // test fn_pointer_unnamed_arg
+            // type Foo = fn(_: bar);
+            Flavor::FnPointer => {
+                if (p.at(IDENT) || p.at(UNDERSCORE)) && p.nth(1) == T![:] && !p.nth_at(1, T![::]) {
+                    patterns::pattern_single(p);
+                    if variadic_param(p) {
+                        res = Variadic(true)
+                    } else {
+                        types::ascription(p);
+                    }
+                } else {
+                    types::type_(p);
+                }
+            }
+            // test closure_params
+            // fn main() {
+            //    let foo = |bar, baz: Baz, qux: Qux::Quux| ();
+            // }
+            Flavor::Closure => {
+                patterns::pattern_single(p);
+                if p.at(T![:]) && !p.at(T![::]) {
+                    types::ascription(p);
+                }
             }
         }
-    }
-    m.complete_sealed(p, PARAM);
+    });
     res
 }
 

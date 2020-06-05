@@ -55,7 +55,6 @@ fn path(p: &mut Parser, mode: Mode) {
             break;
         }
     }
-    p.seal(qual);
 }
 
 fn path_segment(p: &mut Parser, mode: Mode, first: bool) {

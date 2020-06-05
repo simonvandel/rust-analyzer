@@ -42,6 +42,9 @@ fn main() {
 fn parser_tests() {
     dir_tests(&test_data_dir(), &["parser/inline/ok", "parser/ok"], "rast", |text, path| {
         eprintln!("path:{:?}", path);
+        if path.to_str().unwrap().contains("0006_inner_attributes") {
+            eprintln!("sss");
+        }
         let parse = SourceFile::parse(text);
         let errors = parse.errors();
         assert_errors_are_absent(&errors, path);
