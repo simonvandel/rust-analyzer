@@ -89,25 +89,25 @@ pub(super) fn impl_def(p: &mut Parser) {
 // }
 pub(crate) fn impl_item_list(p: &mut Parser) {
     assert!(p.at(T!['{']));
-    let m = p.start();
-    p.bump(T!['{']);
-    // test impl_inner_attributes
-    // enum F{}
-    // impl F {
-    //      //! This is a doc comment
-    //      #![doc("This is also a doc comment")]
-    // }
-    attributes::inner_attributes(p);
+    p.with_sealed(ITEM_LIST, |p| {
+        p.bump(T!['{']);
+        // test impl_inner_attributes
+        // enum F{}
+        // impl F {
+        //      //! This is a doc comment
+        //      #![doc("This is also a doc comment")]
+        // }
+        attributes::inner_attributes(p);
 
-    while !p.at(EOF) && !p.at(T!['}']) {
-        if p.at(T!['{']) {
-            error_block(p, "expected an item");
-            continue;
+        while !p.at(EOF) && !p.at(T!['}']) {
+            if p.at(T!['{']) {
+                error_block(p, "expected an item");
+                continue;
+            }
+            item_or_macro(p, true, ItemFlavor::Mod);
         }
-        item_or_macro(p, true, ItemFlavor::Mod);
-    }
-    p.expect(T!['}']);
-    m.complete_sealed(p, ITEM_LIST);
+        p.expect(T!['}']);
+    });
 }
 
 // test impl_type_params

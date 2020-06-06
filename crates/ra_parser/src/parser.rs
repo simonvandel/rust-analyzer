@@ -214,6 +214,7 @@ impl<'t> Parser<'t> {
         );
 
         let mut m = self.start();
+        m.must_pop_stack_on_drop = false;
 
         // set the kind since we know it - this makes it possible to eagerly drain the events
 
@@ -377,11 +378,10 @@ impl<'t> Parser<'t> {
         eprintln!("seal_current called");
         self.pop_buffering_index();
 
-        // // the current marker is now sealed - if nothing is currently in buffereing mode, we can drain the events
-        // if self.buffering_start_index.is_empty() {
-        //     debug_assert!(!self.events.is_empty());
-        //     self.drain_events(idx_to_drain_from)
-        // }
+        // the current marker is now sealed - if nothing is currently in buffereing mode, we can drain the events
+        if self.buffering_start_index.is_empty() {
+            self.drain_events(0)
+        }
     }
 
     fn do_bump(&mut self, kind: SyntaxKind, n_raw_tokens: u8) {
@@ -402,10 +402,6 @@ impl<'t> Parser<'t> {
         eprintln!("push_event called {:?}", event);
         if self.buffering_start_index.is_empty() {
             self.events.push(event);
-            // drain this event
-            // self.drain_events(self.events.len() as u32 - 1)
-            // self.drain_events(self.events.len() as u32)
-
             self.drain_events(0)
         } else {
             self.events.push(event)
@@ -452,10 +448,7 @@ impl<T: MarkerType> Drop for Marker<T> {
             let p_ptr = self.parser_ptr as *mut Parser;
             unsafe {
                 let p = &mut (*p_ptr);
-                // we only want to pop the stack if this marker was created buffered
-                if p.buffering_start_index.last().map_or(false, |x| *x == self.pos) {
-                    p.seal_current()
-                }
+                p.seal_current()
             }
         }
     }
@@ -498,8 +491,8 @@ impl Marker<Sealed> {
             only_completable: true,
             t: Default::default(),
             start_event_is_buffered: true,
-            must_pop_stack_on_drop: false,
-            parser_ptr: 0,
+            must_pop_stack_on_drop: true,
+            parser_ptr: p as *mut _ as usize,
         };
         p.set_buffered(ret.pos);
         ret
