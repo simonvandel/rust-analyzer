@@ -53,7 +53,6 @@ impl<'t> Parser<'t> {
     pub(crate) fn finish(mut self) {
         let f = self.f;
         f(&mut self);
-        eprintln!("finishing with len: {} cap: {}", self.events.len(), self.events.capacity());
         self.drain_events(0);
     }
 
@@ -198,8 +197,6 @@ impl<'t> Parser<'t> {
     where
         F: FnOnce(&mut Parser, Marker<Precedable>) -> PrecedableMarker,
     {
-        eprintln!("with_precedable_marker called");
-
         let m = self.start_precedable();
         f(self, m)
     }
@@ -208,11 +205,6 @@ impl<'t> Parser<'t> {
     where
         F: FnOnce(&mut Parser) -> R,
     {
-        eprintln!(
-            "with_sealed called (len of buffering_idx: {} )",
-            self.buffering_start_index.len()
-        );
-
         let mut m = self.start();
         m.must_pop_stack_on_drop = false;
 
@@ -239,17 +231,12 @@ impl<'t> Parser<'t> {
     }
 
     fn drain_events(&mut self, start_pos: u32) {
-        eprintln!("drain_events called ({}), ({})", start_pos, self.events.len());
-
         for i in start_pos as usize..self.events.len() {
             let e = mem::replace(&mut self.events[i], Event::tombstone());
             self.process_event(e, i);
         }
 
         self.events.drain(start_pos as usize..self.events.len());
-
-        // TODO this can probably be removed
-        self.forward_parents.clear();
     }
 
     fn process_event(&mut self, e: Event, i: usize) {
@@ -281,17 +268,14 @@ impl<'t> Parser<'t> {
                 }
 
                 for kind in self.forward_parents.drain(..).rev() {
-                    eprintln!("start_node kind: {:?}", kind);
                     self.sink.start_node(kind);
                 }
             }
-            Event::Finish => dbg!(self.sink.finish_node()),
+            Event::Finish => self.sink.finish_node(),
             Event::Token { kind, n_raw_tokens } => {
-                eprintln!("token kind: {:?} n_raw_tokens: {}", kind, n_raw_tokens);
                 self.sink.token(kind, n_raw_tokens);
             }
             Event::Error { msg } => {
-                eprintln!("error msg: {:?}", msg.clone());
                 self.sink.error(msg);
             }
         }
@@ -371,11 +355,10 @@ impl<'t> Parser<'t> {
     }
 
     fn pop_buffering_index(&mut self) -> u32 {
-        dbg!(self.buffering_start_index.pop().unwrap())
+        self.buffering_start_index.pop().unwrap()
     }
 
     pub(crate) fn seal_current(&mut self) {
-        eprintln!("seal_current called");
         self.pop_buffering_index();
 
         // the current marker is now sealed - if nothing is currently in buffereing mode, we can drain the events
@@ -393,23 +376,22 @@ impl<'t> Parser<'t> {
     }
 
     fn push_event_no_drain(&mut self, event: Event) {
-        eprintln!("push_event_no_drain called {:?}", event);
-
         self.events.push(event)
     }
 
     fn push_event(&mut self, event: Event) {
-        eprintln!("push_event called {:?}", event);
         if self.buffering_start_index.is_empty() {
-            self.events.push(event);
-            self.drain_events(0)
+            // we don't want to bother with tombstone events, as we know they will just be disregarded
+            if !matches!(event, Event::Start { kind: TOMBSTONE, forward_parent: None }) {
+                self.events.push(event);
+                self.drain_events(0)
+            }
         } else {
             self.events.push(event)
         }
     }
 
     pub(crate) fn set_buffered(&mut self, pos: u32) {
-        eprintln!("set_buffered {}", pos);
         self.buffering_start_index.push(pos);
     }
 }
@@ -463,7 +445,6 @@ impl<T: MarkerType> Marker<T> {
     /// and mark the create a `CompletedMarker` for possible future
     /// operation like `.precede()` to deal with forward_parent.
     pub(crate) fn complete_sealed(mut self, p: &mut Parser, kind: SyntaxKind) {
-        eprintln!("complete_sealed called kind: {:?}", kind);
         self.bomb.defuse();
         if self.start_event_is_buffered {
             let idx = self.pos as usize;
